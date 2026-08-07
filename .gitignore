@@ -16,3 +16,6 @@ local.properties
 
 # Native build intermediates
 app/.cxx/
+
+# gl4es is produced by runtime/build-gl4es.sh, not checked in (9 MB of build output)
+app/src/main/jniLibs/*/libgl4es.so
