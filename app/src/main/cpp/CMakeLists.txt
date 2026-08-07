@@ -22,6 +22,11 @@ add_library(lodestone_jvm SHARED
 target_include_directories(lodestone_jvm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(lodestone_jvm dl log android)
 
+# glibc symbols the JDK references that bionic does not provide. Separate from lodestone_jvm so it
+# can be opened with RTLD_GLOBAL, which is the only way the runtime's libraries can resolve against it.
+add_library(lodestone_compat SHARED jvm/bionic_compat.cpp)
+target_link_libraries(lodestone_compat log)
+
 # Stands in for GLFW. LWJGL resolves these symbols by name, so unlike everything else here the
 # library keeps default visibility for its glfw* exports.
 add_library(lodestone_glfw SHARED

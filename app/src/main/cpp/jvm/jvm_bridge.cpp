@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,7 @@ void describeAndClearException(JNIEnv* env) {
 
 } // namespace
 
+
 extern "C" JavaVM* lodestone_android_vm() {
     return g_androidVm;
 }
@@ -137,6 +139,12 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_JvmBridge_na
 
     const StringArray vmArgs(env, vmArgsArray);
     const StringArray mainArgs(env, mainArgsArray);
+
+    // Opened before libjvm, and fresh rather than RTLD_NOLOAD: only a library the linker loads
+    // into the global group can satisfy the JDK's references to glibc symbols bionic lacks.
+    if (dlopen("liblodestone_compat.so", RTLD_NOW | RTLD_GLOBAL) == nullptr) {
+        LOGW("bionic compatibility shims unavailable: %s", dlerror());
+    }
 
     // RTLD_GLOBAL so that the runtime's own libraries (libjava, libnio, libawt) and the GLFW shim
     // resolve HotSpot's exported JNI and JVM_* entry points when the VM loads them later.
