@@ -1,7 +1,19 @@
-# OpenJDK patches for Android
+# Patches for Android
 
 `build-jdk.sh` applies every `*.patch` in `jdk<feature>/` to a pristine checkout with `patch -p1`
-before configuring. Patches are numbered so their order is stable (`0001-…`, `0002-…`).
+before configuring. `build-zink.sh` does the same with `mesa/` and `git apply`. Patches are numbered
+so their order is stable (`0001-…`, `0002-…`).
+
+## Mesa
+
+- **`mesa/0001-export-desktop-gl-entry-points-on-android.patch`** — Mesa only links the desktop GL
+  entry points into a `libGL.so` from its GLX provider, and GLX cannot be built on Android, so an
+  Android build exposes desktop GL solely through `eglGetProcAddress`. LWJGL does not use that: it
+  `dlopen`s whatever `org.lwjgl.opengl.libname` names and resolves each function with `dlsym`, so
+  it needs a library that actually exports the symbols. The patch links Mesa's own
+  `libglapi_bridge` — the same object GLX uses — into a `libGL.so` when the platform is Android.
+
+# OpenJDK
 
 Upstream OpenJDK has no Android target. It builds against glibc, and the build script papers over
 part of the gap by handing `configure` the `*-unknown-linux-gnu` triplet while pointing every tool
