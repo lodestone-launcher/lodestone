@@ -84,7 +84,15 @@ RUN set -eux; \
         "${CLANG}" -shared -fPIC -Wl,-soname,"lib${lib}.so" \
             -o "${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}/lib${lib}.so" /tmp/stub.c; \
     done; \
-    rm /tmp/stub.c
+    rm /tmp/stub.c; \
+    # bionic folds pthread, rt and dl into libc, so HotSpot's `-lpthread -lrt` find nothing. An
+    # empty stub .so would satisfy the linker but leave a DT_NEEDED entry for a library that does
+    # not exist on the device, so libjvm.so would fail to load. An empty linker script satisfies
+    # -l without contributing any dependency at all, which is how toolchains normally handle this.
+    for lib in pthread rt; do \
+        printf '/* %s is part of libc on Android */\n' "${lib}" \
+            > "${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}/lib${lib}.so"; \
+    done
 
 COPY build-jdk.sh /usr/local/bin/build-jdk.sh
 RUN chmod +x /usr/local/bin/build-jdk.sh
