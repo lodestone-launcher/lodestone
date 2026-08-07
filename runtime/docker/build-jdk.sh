@@ -166,6 +166,11 @@ EXTRA_LDFLAGS=(
     "-Wl,-rpath,\$ORIGIN/.."
     "-Wl,-rpath,\$ORIGIN/../server"
     "-Wl,--allow-shlib-undefined"
+    # HotSpot's version script names symbols that do not survive optimisation — vtables for classes
+    # local to the WhiteBox test functions. GNU ld warns about those; lld now defaults to
+    # --no-undefined-version and treats them as errors. This restores the permissive behaviour the
+    # script was written against.
+    "-Wl,--undefined-version"
 )
 
 CONFIGURE_ARGS=(
