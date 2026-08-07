@@ -8,11 +8,14 @@ FROM ubuntu:24.04
 ARG NDK_VERSION=r28c
 ARG DEBIAN_FRONTEND=noninteractive
 
-# OpenJDK's configure script needs a full autoconf toolchain plus a native compiler for the
-# build-host tools it generates and then runs during the cross build.
+# OpenJDK's configure needs a full autoconf toolchain plus a native compiler for the build-host
+# tools it generates and runs during the cross build. That native compiler must also be clang:
+# configure refuses to mix toolchain types, and --with-toolchain-type=clang applies to both.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf \
         build-essential \
+        clang \
+        llvm \
         ca-certificates \
         cpio \
         curl \

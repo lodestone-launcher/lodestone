@@ -74,8 +74,9 @@ export OBJDUMP="${TOOLCHAIN}/bin/llvm-objdump"
 export READELF="${TOOLCHAIN}/bin/llvm-readelf"
 
 # Tools that run on the build host during the cross build must stay native.
-export BUILD_CC=/usr/bin/gcc
-export BUILD_CXX=/usr/bin/g++
+# Must be clang as well: configure rejects a gcc build compiler once the target toolchain is clang.
+export BUILD_CC=/usr/bin/clang
+export BUILD_CXX=/usr/bin/clang++
 
 # ---------------------------------------------------------------------------------------------
 # Source
@@ -164,6 +165,19 @@ CONFIGURE_ARGS=(
     "--with-extra-ldflags=${EXTRA_LDFLAGS[*]}"
     # Android has no DTrace and no CDS archive to dump at build time on a foreign architecture.
     "--with-jvm-features=-dtrace"
+    # configure prints "Ignoring value of CC from the environment. Use command line variables
+    # instead" and then picks up the host gcc, so every tool has to be passed as an assignment.
+    "CC=${CC}"
+    "CXX=${CXX}"
+    "AR=${AR}"
+    "NM=${NM}"
+    "RANLIB=${RANLIB}"
+    "STRIP=${STRIP}"
+    "OBJCOPY=${OBJCOPY}"
+    "OBJDUMP=${OBJDUMP}"
+    "READELF=${READELF}"
+    "BUILD_CC=${BUILD_CC}"
+    "BUILD_CXX=${BUILD_CXX}"
 )
 
 if [[ "${FEATURE}" != "8" ]]; then
