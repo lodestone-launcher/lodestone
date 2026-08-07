@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# Cross-compiles OpenJDK for Android and packages it as a Lodestone runtime tarball.
+#
+# Usage: build-jdk.sh --feature 21 --abi arm64-v8a [--tag jdk-21.0.9-ga] [--output /work/out]
+#
+# The Java runtime Minecraft asks for is named by a `javaVersion.component` in its manifest
+# (`jre-legacy` = 8, `java-runtime-gamma` = 17, `java-runtime-delta` = 21,
+# `java-runtime-epsilon` = 25). This script produces one runtime per (feature, ABI) pair, and the
+# launcher picks between them from that field.
+set -euo pipefail
+
+FEATURE=""
+ABI=""
+TAG=""
+OUTPUT="/work/out"
+SOURCE_ROOT="/work/src"
+JOBS="$(nproc)"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --feature) FEATURE="$2"; shift 2 ;;
+        --abi) ABI="$2"; shift 2 ;;
+        --tag) TAG="$2"; shift 2 ;;
+        --output) OUTPUT="$2"; shift 2 ;;
+        --jobs) JOBS="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+[[ -n "${FEATURE}" ]] || { echo "--feature is required" >&2; exit 2; }
+[[ -n "${ABI}" ]] || { echo "--abi is required" >&2; exit 2; }
+
+NDK_HOME="${NDK_HOME:-/opt/android-ndk}"
+BOOT_JDK_ROOT="${BOOT_JDK_ROOT:-/opt/boot-jdks}"
+PATCH_ROOT="${PATCH_ROOT:-/work/patches}"
+
+# The API level the runtime targets. It must not exceed the app's minSdk, or the JVM will fail to
+# load on devices the launcher itself claims to support.
+ANDROID_API="${ANDROID_API:-26}"
+
+# ---------------------------------------------------------------------------------------------
+# Toolchain selection
+# ---------------------------------------------------------------------------------------------
+case "${ABI}" in
+    arm64-v8a)
+        TRIPLE="aarch64-linux-android"
+        # OpenJDK's configure only understands the GNU triplets it ships autoconf fragments for.
+        # We hand it the glibc triplet and override every tool below, so it configures a normal
+        # 64-bit ARM Linux build while actually compiling against bionic.
+        OPENJDK_TARGET="aarch64-unknown-linux-gnu"
+        JVM_VARIANT="server"
+        ;;
+    x86_64)
+        TRIPLE="x86_64-linux-android"
+        OPENJDK_TARGET="x86_64-unknown-linux-gnu"
+        JVM_VARIANT="server"
+        ;;
+    *)
+        echo "Unsupported ABI: ${ABI}" >&2
+        exit 2
+        ;;
+esac
+
+TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+SYSROOT="${TOOLCHAIN}/sysroot"
+export CC="${TOOLCHAIN}/bin/${TRIPLE}${ANDROID_API}-clang"
+export CXX="${TOOLCHAIN}/bin/${TRIPLE}${ANDROID_API}-clang++"
+export AR="${TOOLCHAIN}/bin/llvm-ar"
+export NM="${TOOLCHAIN}/bin/llvm-nm"
+export RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
+export STRIP="${TOOLCHAIN}/bin/llvm-strip"
+export OBJCOPY="${TOOLCHAIN}/bin/llvm-objcopy"
+export OBJDUMP="${TOOLCHAIN}/bin/llvm-objdump"
+export READELF="${TOOLCHAIN}/bin/llvm-readelf"
+
+# Tools that run on the build host during the cross build must stay native.
+export BUILD_CC=/usr/bin/gcc
+export BUILD_CXX=/usr/bin/g++
+
+# ---------------------------------------------------------------------------------------------
+# Source
+# ---------------------------------------------------------------------------------------------
+case "${FEATURE}" in
+    8)  REPO="https://github.com/openjdk/jdk8u.git" ;;
+    17) REPO="https://github.com/openjdk/jdk17u.git" ;;
+    21) REPO="https://github.com/openjdk/jdk21u.git" ;;
+    25) REPO="https://github.com/openjdk/jdk25u.git" ;;
+    *)  echo "No known repository for feature release ${FEATURE}" >&2; exit 2 ;;
+esac
+
+SRC="${SOURCE_ROOT}/jdk${FEATURE}u"
+if [[ ! -d "${SRC}" ]]; then
+    echo "==> Cloning ${REPO}"
+    mkdir -p "${SOURCE_ROOT}"
+    if [[ -n "${TAG}" ]]; then
+        git clone --depth 1 --branch "${TAG}" "${REPO}" "${SRC}"
+    else
+        git clone --depth 1 "${REPO}" "${SRC}"
+    fi
+fi
+
+# Patches are applied to a pristine checkout every run so a rebuild is reproducible.
+PATCH_DIR="${PATCH_ROOT}/jdk${FEATURE}"
+if [[ -d "${PATCH_DIR}" ]]; then
+    echo "==> Applying patches from ${PATCH_DIR}"
+    for patch in "${PATCH_DIR}"/*.patch; do
+        [[ -e "${patch}" ]] || continue
+        echo "    $(basename "${patch}")"
+        # --forward keeps a re-run on an already-patched tree from failing the build.
+        patch -p1 --forward --directory="${SRC}" < "${patch}" || {
+            status=$?
+            # Exit status 1 from `patch --forward` means "already applied", which is fine.
+            [[ ${status} -eq 1 ]] || exit ${status}
+        }
+    done
+else
+    echo "==> No patch directory at ${PATCH_DIR}; building unpatched"
+fi
+
+# An update release bootstraps from its own feature version, which is simpler to obtain than the
+# N-1 release upstream nominally requires and is what the jdk*u maintainers themselves test with.
+BOOT_JDK="${BOOT_JDK_ROOT}/jdk-${FEATURE}"
+[[ -d "${BOOT_JDK}" ]] || { echo "Missing boot JDK at ${BOOT_JDK}" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------------------------
+# Configure
+# ---------------------------------------------------------------------------------------------
+BUILD_DIR="${SRC}/build/android-${ABI}"
+rm -rf "${BUILD_DIR}"
+
+# bionic folds pthread, rt and dl into libc, so the separate -l flags OpenJDK emits do not resolve.
+# `-landroid -llog` give the VM access to the platform logger for its own diagnostics.
+EXTRA_CFLAGS=(
+    "-D__ANDROID_API__=${ANDROID_API}"
+    "-DNO_ZLIB_UNCOMPRESS2"
+    "-fPIC"
+    "-Wno-error"
+    "-Wno-unused-command-line-argument"
+)
+EXTRA_LDFLAGS=(
+    "-landroid"
+    "-llog"
+    # The runtime is relocatable: every library resolves its siblings relative to its own location
+    # rather than through LD_LIBRARY_PATH, which we cannot set before the process starts.
+    "-Wl,-rpath,\$ORIGIN"
+    "-Wl,-rpath,\$ORIGIN/.."
+    "-Wl,-rpath,\$ORIGIN/../server"
+    "-Wl,--allow-shlib-undefined"
+)
+
+CONFIGURE_ARGS=(
+    "--openjdk-target=${OPENJDK_TARGET}"
+    "--with-boot-jdk=${BOOT_JDK}"
+    "--with-sysroot=${SYSROOT}"
+    "--with-toolchain-type=clang"
+    "--with-jvm-variants=${JVM_VARIANT}"
+    "--with-debug-level=release"
+    "--with-native-debug-symbols=none"
+    "--enable-headless-only"
+    "--disable-warnings-as-errors"
+    "--disable-precompiled-headers"
+    "--with-extra-cflags=${EXTRA_CFLAGS[*]}"
+    "--with-extra-cxxflags=${EXTRA_CFLAGS[*]}"
+    "--with-extra-ldflags=${EXTRA_LDFLAGS[*]}"
+    # Android has no DTrace and no CDS archive to dump at build time on a foreign architecture.
+    "--with-jvm-features=-dtrace"
+)
+
+if [[ "${FEATURE}" != "8" ]]; then
+    # `--with-build-jdk` lets the cross build run jlink and friends natively instead of trying to
+    # execute freshly built Android binaries on the build host.
+    CONFIGURE_ARGS+=("--with-build-jdk=${BOOT_JDK}")
+    CONFIGURE_ARGS+=("--enable-option-checking=fatal")
+fi
+
+echo "==> Configuring OpenJDK ${FEATURE} for ${ABI}"
+mkdir -p "${BUILD_DIR}"
+(
+    cd "${SRC}"
+    bash configure --with-conf-name="android-${ABI}" "${CONFIGURE_ARGS[@]}"
+)
+
+# ---------------------------------------------------------------------------------------------
+# Build and package
+# ---------------------------------------------------------------------------------------------
+echo "==> Building with ${JOBS} jobs"
+make -C "${SRC}" CONF_NAME="android-${ABI}" JOBS="${JOBS}" images
+
+IMAGE_DIR="${BUILD_DIR}/images/jdk"
+[[ -d "${IMAGE_DIR}" ]] || IMAGE_DIR="${BUILD_DIR}/images/j2sdk-image"
+[[ -d "${IMAGE_DIR}" ]] || { echo "No image produced under ${BUILD_DIR}/images" >&2; exit 1; }
+
+mkdir -p "${OUTPUT}"
+ARCHIVE="${OUTPUT}/lodestone-jre${FEATURE}-${ABI}.tar.gz"
+
+echo "==> Packaging ${ARCHIVE}"
+# Android's installer refuses to extract files with an executable bit it does not expect, and the
+# launcher restores permissions itself, so the archive stores a plain tree.
+tar -czf "${ARCHIVE}" -C "$(dirname "${IMAGE_DIR}")" "$(basename "${IMAGE_DIR}")"
+( cd "${OUTPUT}" && sha256sum "$(basename "${ARCHIVE}")" > "$(basename "${ARCHIVE}").sha256" )
+
+echo "==> Done: ${ARCHIVE}"
+ls -la "${OUTPUT}"
