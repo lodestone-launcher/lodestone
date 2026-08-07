@@ -93,6 +93,8 @@ struct WindowState {
     // --- EGL, owned exclusively by the render thread -------------------------------------------
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLSurface surface = EGL_NO_SURFACE;
+    /** Stands in for the window surface whenever Android has taken the real one away. */
+    EGLSurface placeholder = EGL_NO_SURFACE;
     EGLContext context = EGL_NO_CONTEXT;
     EGLConfig config = nullptr;
     ANativeWindow* nativeWindow = nullptr;

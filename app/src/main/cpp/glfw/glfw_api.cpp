@@ -78,8 +78,18 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
 
     s.nativeWindow = window;
     if (window == nullptr) {
+        // GLFW keeps a context current until the caller changes it, and Minecraft leans on that: it
+        // makes GL calls between frames, including while the activity is backgrounded and Android
+        // has reclaimed the surface. The placeholder keeps those calls landing in a live context.
+        eglMakeCurrent(s.display, s.placeholder, s.placeholder, s.context);
         return false;
     }
+
+    // EGL requires the window's buffer format to match the config's native visual, and the
+    // compositor will otherwise refuse the surface with EGL_BAD_MATCH.
+    EGLint visualId = 0;
+    eglGetConfigAttrib(s.display, s.config, EGL_NATIVE_VISUAL_ID, &visualId);
+    ANativeWindow_setBuffersGeometry(window, 0, 0, visualId);
 
     s.surface = eglCreateWindowSurface(s.display, s.config, window, nullptr);
     if (s.surface == EGL_NO_SURFACE) {
@@ -120,7 +130,7 @@ __attribute__((visibility("default"))) int glfwInit() {
     // Minecraft needs a depth buffer and 8-bit colour; it manages its own stencil and multisample
     // state through framebuffer objects rather than the default framebuffer.
     const EGLint attributes[] = {
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
@@ -144,6 +154,14 @@ __attribute__((visibility("default"))) int glfwInit() {
         return GLFW_FALSE;
     }
 
+    // One pixel, because nothing is ever meant to be read back from it: it exists so that a thread
+    // between surfaces still has somewhere for its context to be current.
+    const EGLint placeholderAttributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    s.placeholder = eglCreatePbufferSurface(s.display, s.config, placeholderAttributes);
+    if (s.placeholder == EGL_NO_SURFACE) {
+        LOGW("no placeholder surface: 0x%04x", eglGetError());
+    }
+
     s.initialised.store(true);
     LOGI("GLFW shim initialised");
     return GLFW_TRUE;
@@ -158,6 +176,10 @@ __attribute__((visibility("default"))) void glfwTerminate() {
     if (s.surface != EGL_NO_SURFACE) {
         eglDestroySurface(s.display, s.surface);
         s.surface = EGL_NO_SURFACE;
+    }
+    if (s.placeholder != EGL_NO_SURFACE) {
+        eglDestroySurface(s.display, s.placeholder);
+        s.placeholder = EGL_NO_SURFACE;
     }
     if (s.context != EGL_NO_CONTEXT) {
         eglDestroyContext(s.display, s.context);
