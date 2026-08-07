@@ -5,8 +5,12 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include "common/log.h"
@@ -17,6 +21,18 @@ namespace lodestone {
 namespace {
 
 std::atomic_bool g_installed{false};
+
+/**
+ * A line the game can never produce, written down the pipe to prove it has been drained.
+ *
+ * The pipe's read end lives in this process, so anything still in it when the process goes away is
+ * lost with it. Waiting for a token to come back out is the only way to know the pump has caught up.
+ */
+constexpr char kDrainMarker[] = "\x01lodestone-drain\x01";
+
+std::mutex g_drainMutex;
+std::condition_variable g_drainSignal;
+bool g_drained = false;
 
 struct PumpState {
     int readFd;
@@ -33,12 +49,18 @@ void emitLine(JNIEnv* env, PumpState* state, const char* data, size_t length) {
     if (length == 0) {
         return;
     }
+    if (length == sizeof(kDrainMarker) - 1 && std::memcmp(data, kDrainMarker, length) == 0) {
+        {
+            std::lock_guard<std::mutex> lock(g_drainMutex);
+            g_drained = true;
+        }
+        g_drainSignal.notify_all();
+        return;
+    }
     __android_log_print(ANDROID_LOG_INFO, "Minecraft", "%.*s", static_cast<int>(length), data);
 
-    // Mirrored to a file, flushed per line. HotSpot reports a fatal startup problem by printing to
-    // stderr and calling exit() immediately, which tears the process down before this thread can
-    // drain the pipe — so the one message explaining the failure is exactly the message logcat
-    // never receives. The file survives.
+    // Mirrored to a file, flushed per line, so that output already seen outlives the process even
+    // when the game exits without unwinding.
     if (state->mirror != nullptr) {
         fwrite(data, 1, length, state->mirror);
         fputc('\n', state->mirror);
@@ -109,6 +131,34 @@ void* pumpMain(void* argument) {
     return nullptr;
 }
 
+/**
+ * Blocks until the pump has consumed everything written so far, or two seconds have passed.
+ *
+ * HotSpot reports a fatal startup problem by printing to stderr and calling exit() straight after,
+ * and the pump runs on a thread of this same process. Without this handshake the scheduler decides
+ * whether the one message explaining the failure is ever read out of the pipe, and in practice it
+ * is not — the process dies looking as though the VM stopped mid-sentence.
+ */
+void drainStdioPump() {
+    if (!g_installed.load()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_drainMutex);
+        g_drained = false;
+    }
+    // Anything the C runtime is still holding has to reach the pipe ahead of the marker, and exit()
+    // does not flush the streams until every handler has run.
+    fflush(nullptr);
+    // The leading newline terminates a partial line, which would otherwise swallow the marker.
+    const char marker[] = "\n\x01lodestone-drain\x01\n";
+    if (write(STDERR_FILENO, marker, sizeof(marker) - 1) < 0) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(g_drainMutex);
+    g_drainSignal.wait_for(lock, std::chrono::seconds(2), [] { return g_drained; });
+}
+
 } // namespace
 
 bool startStdioPump(JNIEnv* env, jobject sink) {
@@ -159,6 +209,7 @@ bool startStdioPump(JNIEnv* env, jobject sink) {
         g_installed.store(false);
         return false;
     }
+    atexit(drainStdioPump);
     return true;
 }
 

@@ -1,10 +1,11 @@
 // glibc symbols the JDK's own libraries reference but bionic does not provide.
 //
 // This lives in its own shared object rather than alongside the bridge because of how Android's
-// linker scopes symbols. ART loads the app's libraries into a local group, and re-opening one with
-// RTLD_NOLOAD | RTLD_GLOBAL returns a handle without moving it — so a shim defined in the bridge
-// stays invisible to the runtime. Only a library opened fresh with RTLD_GLOBAL joins the global
-// group, and only then can libjava.so resolve against it.
+// linker scopes symbols. A library only satisfies another library's undefined symbols if it is in
+// that library's own dependency closure or in the namespace's global group, and membership of the
+// global group comes from the DF_1_GLOBAL flag in the ELF — `-z global` in CMakeLists, not the
+// RTLD_GLOBAL passed to dlopen, which governs dlsym visibility alone. The runtime's libraries are
+// dlopened by HotSpot and never name this one, so the global group is the only route to them.
 
 #include <cerrno>
 #include <cstring>

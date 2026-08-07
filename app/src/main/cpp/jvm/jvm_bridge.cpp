@@ -140,8 +140,9 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_JvmBridge_na
     const StringArray vmArgs(env, vmArgsArray);
     const StringArray mainArgs(env, mainArgsArray);
 
-    // Opened before libjvm, and fresh rather than RTLD_NOLOAD: only a library the linker loads
-    // into the global group can satisfy the JDK's references to glibc symbols bionic lacks.
+    // Opened before libjvm so that it is already in the namespace's global group by the time the
+    // VM starts pulling in the runtime's own libraries. What puts it there is the DF_1_GLOBAL flag
+    // the library is linked with, not the RTLD_GLOBAL below.
     if (dlopen("liblodestone_compat.so", RTLD_NOW | RTLD_GLOBAL) == nullptr) {
         LOGW("bionic compatibility shims unavailable: %s", dlerror());
     }
