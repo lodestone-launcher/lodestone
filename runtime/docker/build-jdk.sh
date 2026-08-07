@@ -177,6 +177,11 @@ CONFIGURE_ARGS=(
     # headers cannot satisfy it and there is no aarch64-android library to link against. OpenJDK
     # carries its own freetype source for exactly this case; building it for the target sidesteps
     # the host library entirely.
+    # `--enable-headless-only` does not stop jdk21u from requiring X11, and the check is autoconf's
+    # AC_PATH_X, which does its own search and ignores --with-sysroot entirely. These are that
+    # macro's documented cross-compile escape hatch, pointing it at the staged headers and stubs.
+    "--x-includes=${SYSROOT}/usr/include"
+    "--x-libraries=${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}"
     "--with-freetype=bundled"
     # Same reasoning: both are vendored, and the system copies in the image are x86_64.
     "--with-libjpeg=bundled"

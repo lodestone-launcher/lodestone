@@ -63,8 +63,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # of them lazily at runtime. Staging the headers therefore gets a clean cross build, and the
 # corresponding features simply report themselves unavailable on-device.
 #
-# ALSA additionally needs a stub library, because libjsound is the one component that links
-# `-lasound` rather than loading it dynamically.
+# ALSA and X11 additionally need stub libraries, because those are linked rather than loaded
+# dynamically. The stubs export nothing real — they exist purely so the link step resolves, and the
+# modules that reference them are never reached on a device with no sound server and no X server.
 #
 # Nothing Minecraft does is affected: audio goes through OpenAL, and there is no printing, no X
 # server and no desktop toolkit on a phone.
@@ -73,11 +74,13 @@ RUN set -eux; \
     for headers in alsa cups fontconfig X11 freetype2; do \
         [ -e "/usr/include/${headers}" ] && cp -r "/usr/include/${headers}" "${SYSROOT}/usr/include/" || true; \
     done; \
-    echo 'void __lodestone_alsa_unavailable(void) {}' > /tmp/alsa_stub.c; \
-    "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
-        -shared -fPIC -Wl,-soname,libasound.so.2 \
-        -o "${SYSROOT}/usr/lib/aarch64-linux-android/26/libasound.so" /tmp/alsa_stub.c; \
-    rm /tmp/alsa_stub.c
+    echo 'void __lodestone_stub(void) {}' > /tmp/stub.c; \
+    CLANG="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"; \
+    for lib in asound X11 Xext Xrender Xrandr Xtst Xt Xi Xau Xdmcp xcb; do \
+        "${CLANG}" -shared -fPIC -Wl,-soname,"lib${lib}.so" \
+            -o "${SYSROOT}/usr/lib/aarch64-linux-android/26/lib${lib}.so" /tmp/stub.c; \
+    done; \
+    rm /tmp/stub.c
 
 COPY build-jdk.sh /usr/local/bin/build-jdk.sh
 RUN chmod +x /usr/local/bin/build-jdk.sh
