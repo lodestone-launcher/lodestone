@@ -162,9 +162,19 @@ EXTRA_LDFLAGS=(
     "-llog"
     # The runtime is relocatable: every library resolves its siblings relative to its own location
     # rather than through LD_LIBRARY_PATH, which we cannot set before the process starts.
-    "-Wl,-rpath,\$ORIGIN"
-    "-Wl,-rpath,\$ORIGIN/.."
-    "-Wl,-rpath,\$ORIGIN/../server"
+    #
+    # Single-quoted, because $ORIGIN must reach the linker literally: inside double quotes the
+    # shell expands $O to nothing and the tag degrades to a useless "RIGIN".
+    #
+    # --enable-new-dtags is what makes them work at all on Android. Without it the linker
+    # writes DT_RPATH, which bionic ignores outright; only DT_RUNPATH is honoured. The failure
+    # is silent until a library that was not loaded by absolute path has to resolve a sibling,
+    # at which point libjava.so cannot find libjvm.so and the VM dies during startup.
+    "-Wl,--enable-new-dtags"
+    '-Wl,-rpath,$ORIGIN'
+    '-Wl,-rpath,$ORIGIN/..'
+    '-Wl,-rpath,$ORIGIN/../server'
+    '-Wl,-rpath,$ORIGIN/../lib'
     "-Wl,--allow-shlib-undefined"
     # HotSpot's version script names symbols that do not survive optimisation — vtables for classes
     # local to the WhiteBox test functions. GNU ld warns about those; lld now defaults to
