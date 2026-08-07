@@ -74,6 +74,15 @@ class LaunchArgumentBuilder(
         // The game is always the foreground app here, so there is no windowing system to talk to
         // beyond the surface the shim owns.
         arguments += "-Djava.awt.headless=true"
+        // Nothing the game spawns can run — SELinux refuses execute_no_trans on anything under app
+        // storage — but the default POSIX_SPAWN mechanism does not merely fail. It clones with
+        // CLONE_VM, and bionic's posix_spawn unwinds a failed exec by calling sigaction from that
+        // child, which rewrites the signal chain ART and HotSpot share in the address space they
+        // are both mapped into. HotSpot's SIGSEGV handler is gone from that moment on, so its next
+        // implicit null check kills the process:
+        //   E/libsigchain: reverting to SIG_DFL handler for signal 11
+        // Forking gives the child its own copy, so a failed exec stays the child's problem.
+        arguments += "-Djdk.lang.Process.launchMechanism=FORK"
         // LWJGL unpacks its own bundled natives unless told where ours already are.
         arguments += "-Dorg.lwjgl.librarypath=${paths.nativesDirectory.absolutePath}"
 
