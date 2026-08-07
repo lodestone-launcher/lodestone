@@ -160,22 +160,14 @@ EXTRA_CFLAGS=(
 EXTRA_LDFLAGS=(
     "-landroid"
     "-llog"
-    # The runtime is relocatable: every library resolves its siblings relative to its own location
-    # rather than through LD_LIBRARY_PATH, which we cannot set before the process starts.
+    # No -rpath entries on purpose. bionic ignores DT_RPATH outright and honours only DT_RUNPATH,
+    # and getting $ORIGIN through the shell, make, and the shell make invokes takes a different
+    # number of escapes at each layer — the attempts produced "RIGIN" and then a bare "/..".
     #
-    # Written $$ORIGIN, and single-quoted. Two layers eat it otherwise: the shell expands $O
-    # inside double quotes, and make then reads a surviving $ORIGIN as $(O)RIGIN and expands
-    # the undefined O to nothing. Either one alone leaves a useless "RIGIN".
-    #
-    # --enable-new-dtags is what makes them work at all on Android. Without it the linker
-    # writes DT_RPATH, which bionic ignores outright; only DT_RUNPATH is honoured. The failure
-    # is silent until a library that was not loaded by absolute path has to resolve a sibling,
-    # at which point libjava.so cannot find libjvm.so and the VM dies during startup.
-    "-Wl,--enable-new-dtags"
-    '-Wl,-rpath,$$ORIGIN'
-    '-Wl,-rpath,$$ORIGIN/..'
-    '-Wl,-rpath,$$ORIGIN/../server'
-    '-Wl,-rpath,$$ORIGIN/../lib'
+    # They are not needed. jvm_bridge.cpp opens libjvm.so by absolute path with RTLD_GLOBAL before
+    # the VM starts, which registers it in the app's linker namespace under its soname, so
+    # libjava.so's `NEEDED libjvm.so` resolves from there. LD_LIBRARY_PATH set by
+    # JavaRuntimeManager covers the rest of the runtime's libraries.
     "-Wl,--allow-shlib-undefined"
     # HotSpot's version script names symbols that do not survive optimisation — vtables for classes
     # local to the WhiteBox test functions. GNU ld warns about those; lld now defaults to
