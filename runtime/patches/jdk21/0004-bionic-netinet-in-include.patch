@@ -1,0 +1,15 @@
+diff --git a/src/java.base/unix/native/libnet/net_util_md.h b/src/java.base/unix/native/libnet/net_util_md.h
+index 902cf9673..b486c8690 100644
+--- a/src/java.base/unix/native/libnet/net_util_md.h
++++ b/src/java.base/unix/native/libnet/net_util_md.h
+@@ -29,6 +29,10 @@
+ #include <netdb.h>
+ #include <poll.h>
+ #include <sys/socket.h>
++// SOCKETADDRESS below embeds sockaddr_in and sockaddr_in6 by value, so their full definitions have
++// to be visible. glibc's <netdb.h> happens to pull <netinet/in.h> in transitively; bionic's does
++// not, leaving both types incomplete.
++#include <netinet/in.h>
+ 
+ /************************************************************************
+  * Macros and constants
