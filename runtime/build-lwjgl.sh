@@ -103,13 +103,16 @@ for abi in "${ABIS[@]}"; do
         mkdir -p "${ffi_build}"
         (
             cd "${ffi_build}"
+            # multi-os-directory probing shells out to `-print-multi-os-directory`, which the NDK's
+            # clang rejects outright; the NDK already keeps one sysroot per triple regardless.
             # Static, because the .a is linked straight into liblwjgl.so and shipping a second
             # shared object would only add another file for the loader to find.
             "${LIBFFI_SRC}/configure" \
                 --host="${triple}" \
                 --prefix="${ffi_prefix}" \
                 --enable-static --disable-shared \
-                --disable-docs
+                --disable-docs \
+                --disable-multi-os-directory
             make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
             make install
         )
@@ -136,7 +139,9 @@ for abi in "${ABIS[@]}"; do
             done
             ;;
         x86_64)
-            for name in FFI_STDCALL FFI_THISCALL FFI_FASTCALL FFI_PASCAL FFI_REGISTER FFI_VFP; do
+            # x86_64 keeps FFI_UNIX64/WIN64/GNUW64/EFI64; SYSV is 32-bit only and MS_CDECL is Windows.
+            for name in FFI_SYSV FFI_MS_CDECL FFI_STDCALL FFI_THISCALL FFI_FASTCALL \
+                        FFI_PASCAL FFI_REGISTER FFI_VFP; do
                 absent_abis+=("-D${name}=FFI_LAST_ABI")
             done
             ;;
@@ -167,11 +172,17 @@ for abi in "${ABIS[@]}"; do
         -o "${out}/liblwjgl.so"
 
     stb="${LWJGL_SRC}/modules/lwjgl/stb/src"
+    # Only the generated bindings are compiled: stb's own amalgamation under main/c is #included
+    # by them, so listing it again would define every stb_vorbis symbol twice.
+    # stb_dxt.h calls memcpy without including <string.h>, which older compilers tolerated; force it.
+    # stb pulls in core's common_tools.h, which only defines DISABLE_WARNINGS/ENABLE_WARNINGS by way
+    # of LinuxConfig.h — so this needs the same platform define and include path that core does.
     # shellcheck disable=SC2046
     "${CC}" -O2 -fPIC -shared -fvisibility=hidden \
-        -I"${core}/main/c" -I"${core}/generated/c" -I"${stb}/main/c" \
+        -DLWJGL_LINUX -D_GNU_SOURCE \
+        -include string.h \
+        -I"${core}/main/c" -I"${core}/main/c/linux" -I"${core}/generated/c" -I"${stb}/main/c" \
         $(find "${stb}/generated/c" -maxdepth 1 -name '*.c') \
-        $(find "${stb}/main/c" -maxdepth 1 -name '*.c') \
         -lm -o "${out}/liblwjgl_stb.so"
 
     echo "    $(ls -la "${out}" | grep -c '\.so') libraries in ${out}"
