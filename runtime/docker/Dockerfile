@@ -43,6 +43,20 @@ ENV BOOT_JDK_ROOT=/opt/boot-jdks
 COPY fetch-boot-jdks.sh /usr/local/bin/fetch-boot-jdks.sh
 RUN chmod +x /usr/local/bin/fetch-boot-jdks.sh && /usr/local/bin/fetch-boot-jdks.sh
 
+# Deliberately a separate, later layer: editing the first apt block would invalidate the NDK and
+# boot-JDK layers above it and force several gigabytes to download again.
+#
+# OpenJDK's java.desktop module wants ALSA headers even under --enable-headless-only. Android has
+# no ALSA, but only the headers are needed to compile: libjsound dlopens the library at runtime and
+# fails harmlessly when it is absent. Minecraft drives audio through OpenAL, not javax.sound, so
+# nothing the game does depends on it working.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libasound2-dev \
+        libcups2-dev \
+        libfontconfig1-dev \
+        libx11-dev libxext-dev libxrender-dev libxrandr-dev libxtst-dev libxt-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY build-jdk.sh /usr/local/bin/build-jdk.sh
 RUN chmod +x /usr/local/bin/build-jdk.sh
 

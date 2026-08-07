@@ -66,9 +66,13 @@ jobs:
 
       - name: Cross-compile OpenJDK ${{ matrix.feature }} for ${{ matrix.abi }}
         run: |
-          mkdir -p "${{ github.workspace }}/out"
+          mkdir -p "${{ github.workspace }}/out" "${{ github.workspace }}/src"
+          # /work/src is mounted rather than left inside the container: without it every run
+          # re-clones several hundred megabytes of OpenJDK, which dominates the iteration loop
+          # while the bionic patch set is still being developed.
           docker run --rm \
             -v "${{ github.workspace }}/runtime/patches:/work/patches:ro" \
+            -v "${{ github.workspace }}/src:/work/src" \
             -v "${{ github.workspace }}/out:/work/out" \
             lodestone-jdk-builder:latest \
             --feature "${{ matrix.feature }}" \
