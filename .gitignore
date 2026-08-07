@@ -20,6 +20,10 @@ app/.cxx/
 # gl4es is produced by runtime/build-gl4es.sh, not checked in (9 MB of build output)
 app/src/main/jniLibs/*/libgl4es.so
 
-# The cross-built LWJGL natives come from runtime/build-lwjgl.sh, for the same reason.
+# The cross-built LWJGL natives come from runtime/build-lwjgl.sh, for the same reason. FreeType and
+# OpenAL Soft are in that set too: the freetype and openal bindings have no JNI library of their
+# own, so what a version unpacks for them is the upstream library itself.
 app/src/main/jniLibs/*/liblwjgl*.so
+app/src/main/jniLibs/*/libfreetype.so
+app/src/main/jniLibs/*/libopenal.so
 /out/
