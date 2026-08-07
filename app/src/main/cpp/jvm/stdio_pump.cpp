@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +42,100 @@ struct PumpState {
     jmethodID acceptId; // void accept(String)
 };
 
+void appendReplacementCharacter(std::string& out) {
+    out.append("\xef\xbf\xbd");
+}
+
+/**
+ * Length of the UTF-8 sequence starting at `data`, or 0 if it is not a well-formed one.
+ *
+ * Overlong forms and surrogate encodings are rejected as malformed rather than decoded, because
+ * both are ways of smuggling a byte pattern past a naive validator.
+ */
+size_t utf8SequenceLength(const unsigned char* data, size_t available) {
+    const unsigned char lead = data[0];
+    size_t length;
+    uint32_t codePoint;
+    if (lead < 0x80) {
+        return 1;
+    } else if ((lead & 0xe0) == 0xc0) {
+        length = 2;
+        codePoint = lead & 0x1fu;
+    } else if ((lead & 0xf0) == 0xe0) {
+        length = 3;
+        codePoint = lead & 0x0fu;
+    } else if ((lead & 0xf8) == 0xf0) {
+        length = 4;
+        codePoint = lead & 0x07u;
+    } else {
+        return 0;
+    }
+    if (available < length) {
+        return 0;
+    }
+    for (size_t i = 1; i < length; ++i) {
+        if ((data[i] & 0xc0) != 0x80) {
+            return 0;
+        }
+        codePoint = (codePoint << 6) | (data[i] & 0x3fu);
+    }
+    const uint32_t minimum[] = {0, 0, 0x80, 0x800, 0x10000};
+    if (codePoint < minimum[length] || codePoint > 0x10ffff) {
+        return 0;
+    }
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+        return 0;
+    }
+    return length;
+}
+
+/**
+ * Rewrites arbitrary bytes into the modified UTF-8 `NewStringUTF` demands.
+ *
+ * This is not defensive polish. ART validates the encoding and *aborts the process* on a bad one —
+ * it does not return null the way the JNI specification suggests — so a single stray byte in the
+ * game's output, which HotSpot's own logging emits whenever it dumps a string constant, kills the
+ * VM outright. Modified UTF-8 also differs from the real thing in two places: NUL is encoded as a
+ * two-byte sequence, and characters outside the BMP are written as a surrogate pair rather than as
+ * one four-byte sequence.
+ */
+std::string toModifiedUtf8(const char* data, size_t length) {
+    const auto* bytes = reinterpret_cast<const unsigned char*>(data);
+    std::string out;
+    out.reserve(length);
+    for (size_t i = 0; i < length;) {
+        if (bytes[i] == 0x00) {
+            out.append("\xc0\x80");
+            ++i;
+            continue;
+        }
+        const size_t sequence = utf8SequenceLength(bytes + i, length - i);
+        if (sequence == 0) {
+            appendReplacementCharacter(out);
+            ++i;
+            continue;
+        }
+        if (sequence < 4) {
+            out.append(data + i, sequence);
+            i += sequence;
+            continue;
+        }
+        uint32_t codePoint = bytes[i] & 0x07u;
+        for (size_t k = 1; k < 4; ++k) {
+            codePoint = (codePoint << 6) | (bytes[i + k] & 0x3fu);
+        }
+        codePoint -= 0x10000;
+        const uint32_t units[] = {0xd800u + (codePoint >> 10), 0xdc00u + (codePoint & 0x3ffu)};
+        for (uint32_t unit : units) {
+            out.push_back(static_cast<char>(0xe0u | (unit >> 12)));
+            out.push_back(static_cast<char>(0x80u | ((unit >> 6) & 0x3fu)));
+            out.push_back(static_cast<char>(0x80u | (unit & 0x3fu)));
+        }
+        i += 4;
+    }
+    return out;
+}
+
 /**
  * Emits one line to logcat and to the Java sink. Lines are forwarded individually so the in-app log
  * viewer sees output at the same granularity the game produced it.
@@ -67,10 +162,9 @@ void emitLine(JNIEnv* env, PumpState* state, const char* data, size_t length) {
         fflush(state->mirror);
     }
 
-    std::string owned(data, length);
+    const std::string owned = toModifiedUtf8(data, length);
     jstring text = env->NewStringUTF(owned.c_str());
     if (text == nullptr) {
-        // A malformed UTF-8 sequence in the game's output must not tear down the pump.
         env->ExceptionClear();
         return;
     }
