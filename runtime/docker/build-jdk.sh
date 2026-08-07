@@ -36,8 +36,13 @@ BOOT_JDK_ROOT="${BOOT_JDK_ROOT:-/opt/boot-jdks}"
 PATCH_ROOT="${PATCH_ROOT:-/work/patches}"
 
 # The API level the runtime targets. It must not exceed the app's minSdk, or the JVM will fail to
-# load on devices the launcher itself claims to support.
-ANDROID_API="${ANDROID_API:-26}"
+# load on devices the launcher claims to support.
+#
+# 30 rather than 26 because HotSpot calls posix_spawn (bionic API 28), getloadavg (29) and dlinfo
+# (30). Those are real functions in bionic, just gated behind newer API levels, so raising the
+# target is a one-line change where patching around them would mean three separate fallbacks in
+# os_linux.cpp and os_posix.cpp.
+ANDROID_API="${ANDROID_API:-30}"
 
 # ---------------------------------------------------------------------------------------------
 # Toolchain selection

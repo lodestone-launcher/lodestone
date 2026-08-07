@@ -35,9 +35,10 @@ android {
 
     defaultConfig {
         applicationId = "com.github.lodestone"
-        // The Java runtime we host needs a bionic with complete ELF TLS support, and the windowing
-        // shim needs the API 26 ANativeWindow surface.
-        minSdk = 26
+        // Set by the Java runtime, not by the app: HotSpot needs dlinfo, which bionic only exposes
+        // from API 30. Android 11 is also a sensible floor for a device expected to run a JVM, a
+        // GL translation layer and Minecraft at once.
+        minSdk = 30
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

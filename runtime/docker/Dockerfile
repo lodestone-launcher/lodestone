@@ -69,16 +69,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # Nothing Minecraft does is affected: audio goes through OpenAL, and there is no printing, no X
 # server and no desktop toolkit on a phone.
+# Declared here rather than at the top so the NDK and boot-JDK layers above stay cached.
+# HotSpot uses posix_spawn (API 28), getloadavg (29) and dlinfo (30); targeting 30 gets all three
+# from bionic directly instead of patching three separate fallbacks into os_linux/os_posix.
+ARG ANDROID_API=30
 RUN set -eux; \
     SYSROOT="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"; \
     for headers in alsa cups fontconfig X11 freetype2; do \
         [ -e "/usr/include/${headers}" ] && cp -r "/usr/include/${headers}" "${SYSROOT}/usr/include/" || true; \
     done; \
     echo 'void __lodestone_stub(void) {}' > /tmp/stub.c; \
-    CLANG="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"; \
+    CLANG="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"; \
     for lib in asound X11 Xext Xrender Xrandr Xtst Xt Xi Xau Xdmcp xcb; do \
         "${CLANG}" -shared -fPIC -Wl,-soname,"lib${lib}.so" \
-            -o "${SYSROOT}/usr/lib/aarch64-linux-android/26/lib${lib}.so" /tmp/stub.c; \
+            -o "${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}/lib${lib}.so" /tmp/stub.c; \
     done; \
     rm /tmp/stub.c
 
