@@ -200,6 +200,27 @@ __attribute__((visibility("default"))) int glfwGetError(const char** description
     return 0;
 }
 
+// The hints select a backend, an allocator and a joystick database, none of which this shim offers
+// a choice about.
+__attribute__((visibility("default"))) void glfwInitHint(int, int) {}
+__attribute__((visibility("default"))) void glfwInitAllocator(const void*) {}
+
+/**
+ * X11, because the game only ever uses this to name the platform and to decide which desktop
+ * quirks to work around.
+ *
+ * Reporting Wayland would make Minecraft skip the window icon and cursor calls this shim already
+ * ignores, and reporting NULL would tell it there is no window system at all — which is the one
+ * answer that changes behaviour, since the null backend has no context to render into.
+ */
+__attribute__((visibility("default"))) int glfwGetPlatform() {
+    return GLFW_PLATFORM_X11;
+}
+
+__attribute__((visibility("default"))) int glfwPlatformSupported(int platform) {
+    return platform == GLFW_PLATFORM_X11 ? GLFW_TRUE : GLFW_FALSE;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------------------------
@@ -265,6 +286,7 @@ __attribute__((visibility("default"))) void glfwSetWindowTitle(GLFWwindow*, cons
 __attribute__((visibility("default"))) void glfwSetWindowIcon(GLFWwindow*, int, const void*) {}
 __attribute__((visibility("default"))) void glfwSetWindowSizeLimits(
         GLFWwindow*, int, int, int, int) {}
+__attribute__((visibility("default"))) void glfwSetWindowAspectRatio(GLFWwindow*, int, int) {}
 __attribute__((visibility("default"))) void glfwIconifyWindow(GLFWwindow*) {}
 __attribute__((visibility("default"))) void glfwRestoreWindow(GLFWwindow*) {}
 __attribute__((visibility("default"))) void glfwMaximizeWindow(GLFWwindow*) {}
@@ -280,6 +302,46 @@ __attribute__((visibility("default"))) int glfwGetWindowAttrib(GLFWwindow*, int)
 }
 
 __attribute__((visibility("default"))) void glfwSetWindowAttrib(GLFWwindow*, int, int) {}
+
+/**
+ * Null, which is what GLFW reports for a window created without a monitor — as Minecraft's is.
+ *
+ * The surface does cover the screen, but claiming a monitor here would tell the game it is in a
+ * fullscreen mode it did not ask for, and it would then try to leave it on the first frame.
+ */
+__attribute__((visibility("default"))) GLFWmonitor* glfwGetWindowMonitor(GLFWwindow*) {
+    return nullptr;
+}
+
+// There is no decoration around the surface, so every edge is flush with the window.
+__attribute__((visibility("default"))) void glfwGetWindowFrameSize(
+        GLFWwindow*, int* left, int* top, int* right, int* bottom) {
+    if (left != nullptr) *left = 0;
+    if (top != nullptr) *top = 0;
+    if (right != nullptr) *right = 0;
+    if (bottom != nullptr) *bottom = 0;
+}
+
+__attribute__((visibility("default"))) float glfwGetWindowOpacity(GLFWwindow*) {
+    return 1.0f;
+}
+
+__attribute__((visibility("default"))) void glfwSetWindowOpacity(GLFWwindow*, float) {}
+
+// Stored rather than dropped: the pointer is the caller's, and handing back something it did not
+// set would corrupt whatever it decides to cast the value to.
+namespace {
+void* g_windowUserPointer = nullptr;
+void* g_monitorUserPointer = nullptr;
+} // namespace
+
+__attribute__((visibility("default"))) void glfwSetWindowUserPointer(GLFWwindow*, void* pointer) {
+    g_windowUserPointer = pointer;
+}
+
+__attribute__((visibility("default"))) void* glfwGetWindowUserPointer(GLFWwindow*) {
+    return g_windowUserPointer;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Context
@@ -475,6 +537,9 @@ __attribute__((visibility("default"))) int glfwGetKeyScancode(int key) {
 }
 
 // There is no system cursor to shape, and no desktop clipboard to share with.
+__attribute__((visibility("default"))) void* glfwCreateCursor(const void*, int, int) {
+    return nullptr;
+}
 __attribute__((visibility("default"))) void* glfwCreateStandardCursor(int) { return nullptr; }
 __attribute__((visibility("default"))) void glfwDestroyCursor(void*) {}
 __attribute__((visibility("default"))) void glfwSetCursor(GLFWwindow*, void*) {}
@@ -595,6 +660,23 @@ __attribute__((visibility("default"))) const char* glfwGetMonitorName(GLFWmonito
     return "Android";
 }
 
+__attribute__((visibility("default"))) void glfwSetMonitorUserPointer(
+        GLFWmonitor*, void* pointer) {
+    g_monitorUserPointer = pointer;
+}
+
+__attribute__((visibility("default"))) void* glfwGetMonitorUserPointer(GLFWmonitor*) {
+    return g_monitorUserPointer;
+}
+
+// Android composites through SurfaceFlinger, which owns the panel's transfer function; there is no
+// per-application ramp to read or write. GLFW returns null on failure, which callers already handle.
+__attribute__((visibility("default"))) const void* glfwGetGammaRamp(GLFWmonitor*) {
+    return nullptr;
+}
+__attribute__((visibility("default"))) void glfwSetGammaRamp(GLFWmonitor*, const void*) {}
+__attribute__((visibility("default"))) void glfwSetGamma(GLFWmonitor*, float) {}
+
 // ---------------------------------------------------------------------------------------------
 // Time
 // ---------------------------------------------------------------------------------------------
@@ -639,7 +721,14 @@ __attribute__((visibility("default"))) const unsigned char* glfwGetJoystickButto
     if (count != nullptr) *count = 0;
     return nullptr;
 }
+__attribute__((visibility("default"))) const unsigned char* glfwGetJoystickHats(int, int* count) {
+    if (count != nullptr) *count = 0;
+    return nullptr;
+}
 __attribute__((visibility("default"))) const char* glfwGetJoystickName(int) { return nullptr; }
+__attribute__((visibility("default"))) const char* glfwGetGamepadName(int) { return nullptr; }
+__attribute__((visibility("default"))) void glfwSetJoystickUserPointer(int, void*) {}
+__attribute__((visibility("default"))) void* glfwGetJoystickUserPointer(int) { return nullptr; }
 __attribute__((visibility("default"))) const char* glfwGetJoystickGUID(int) { return nullptr; }
 __attribute__((visibility("default"))) int glfwJoystickIsGamepad(int) { return GLFW_FALSE; }
 __attribute__((visibility("default"))) int glfwGetGamepadState(int, void*) { return GLFW_FALSE; }
