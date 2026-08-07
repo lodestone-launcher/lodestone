@@ -4,6 +4,7 @@ import android.content.Context
 import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.data.remote.download.DownloadEngine
 import com.github.lodestone.data.repository.VersionInstaller
+import com.github.lodestone.domain.usecase.BuildLaunchSpecUseCase
 import com.github.lodestone.runtime.JavaRuntimeManager
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesTo
@@ -36,6 +37,13 @@ interface DataModule {
         downloads: DownloadEngine,
         files: GameFiles,
     ): VersionInstaller = VersionInstaller(client, downloads, files)
+
+    @Provides
+    @SingleIn(AppScope::class)
+    fun provideBuildLaunchSpec(
+        files: GameFiles,
+        runtimes: JavaRuntimeManager,
+    ): BuildLaunchSpecUseCase = BuildLaunchSpecUseCase(files, runtimes)
 
     @Provides
     @SingleIn(AppScope::class)

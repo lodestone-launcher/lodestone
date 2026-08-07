@@ -186,7 +186,9 @@ class LaunchArgumentBuilder(
     }
 
     private companion object {
-        val PLACEHOLDER = Regex("""\$\{([A-Za-z0-9_]+)}""")
+        // The closing brace is escaped: Android's regex engine rejects a bare `}` where the JVM's
+        // accepts it, so the unescaped form compiles in unit tests and then throws on device.
+        val PLACEHOLDER = Regex("""\$\{([A-Za-z0-9_]+)\}""")
     }
 }
 

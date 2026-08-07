@@ -3,6 +3,7 @@ package com.github.lodestone.di
 import android.app.Application
 import android.content.Context
 import com.github.lodestone.data.repository.VersionInstaller
+import com.github.lodestone.domain.usecase.BuildLaunchSpecUseCase
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.DependencyGraph
 import dev.zacsweers.metro.Provides
@@ -28,4 +29,6 @@ interface AppGraph {
 
     /** Exposed so the UI layer can build view models without depending on the data layer's wiring. */
     val versionInstaller: VersionInstaller
+
+    val buildLaunchSpec: BuildLaunchSpecUseCase
 }

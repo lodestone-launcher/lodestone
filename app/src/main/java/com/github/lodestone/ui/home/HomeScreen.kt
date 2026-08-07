@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.github.lodestone.domain.model.version.VersionChannel
 import com.github.lodestone.domain.model.version.VersionEntry
@@ -34,6 +35,7 @@ import com.github.lodestone.domain.model.version.VersionEntry
 @Composable
 fun HomeScreen(viewModel: HomeViewModel, modifier: Modifier = Modifier) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Scaffold(modifier = modifier.fillMaxSize()) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -75,6 +77,7 @@ fun HomeScreen(viewModel: HomeViewModel, modifier: Modifier = Modifier) {
                             entry = entry,
                             enabled = state.installing == null,
                             onInstall = { viewModel.install(entry) },
+                            onPlay = { viewModel.launch(context, entry) },
                         )
                     }
                 }
@@ -118,12 +121,24 @@ private fun InstallProgress(versionId: String, label: String?, progress: Float) 
 }
 
 @Composable
-private fun VersionRow(entry: VersionEntry, enabled: Boolean, onInstall: () -> Unit) {
+private fun VersionRow(
+    entry: VersionEntry,
+    enabled: Boolean,
+    onInstall: () -> Unit,
+    onPlay: () -> Unit,
+) {
     ListItem(
         headlineContent = { Text(entry.id) },
         supportingContent = { Text(entry.releaseTime?.take(10).orEmpty()) },
         trailingContent = {
-            Button(onClick = onInstall, enabled = enabled) { Text("Install") }
+            Row {
+                Button(onClick = onInstall, enabled = enabled) { Text("Install") }
+                Button(
+                    onClick = onPlay,
+                    enabled = enabled,
+                    modifier = Modifier.padding(start = 8.dp),
+                ) { Text("Play") }
+            }
         },
     )
 }

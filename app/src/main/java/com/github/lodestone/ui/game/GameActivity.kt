@@ -18,8 +18,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.github.lodestone.domain.model.launch.LaunchRequest
 import com.github.lodestone.runtime.GlfwBridge
+import com.github.lodestone.runtime.JvmBridge
 import timber.log.Timber
+import java.io.File
 
 /**
  * Hosts the running game: a full-screen surface with the touch controls drawn over it.
@@ -31,6 +34,7 @@ import timber.log.Timber
 class GameActivity : ComponentActivity() {
 
     private var surfaceView: SurfaceView? = null
+    private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,7 +53,45 @@ class GameActivity : ComponentActivity() {
             GameScreen(
                 onSurfaceCreated = { view -> surfaceView = view },
                 onOpenMenu = ::showInGameMenu,
+                onSurfaceReady = ::startGame,
             )
+        }
+    }
+
+    /**
+     * Boots the VM once, after the surface exists.
+     *
+     * Order matters: the stdio pump has to be installed before the VM starts, because HotSpot
+     * captures the descriptors as it comes up and anything it writes beforehand is lost. The launch
+     * itself blocks until the game exits, so it runs on a thread sized for HotSpot's primordial
+     * stack rather than on the main thread.
+     */
+    @Synchronized
+    private fun startGame() {
+        if (started) {
+            return
+        }
+        val requestFile = File(filesDir, LAUNCH_REQUEST_FILE)
+        val request = LaunchRequest.readFrom(requestFile)
+        if (request == null) {
+            Timber.e("No launch request at %s", requestFile)
+            finish()
+            return
+        }
+        started = true
+
+        JvmBridge.startStdioPump { line -> Timber.tag("Minecraft").i(line) }
+        request.environment.forEach { (key, value) -> JvmBridge.setEnv(key, value) }
+
+        Timber.i("Launching %s via %s", request.versionId, request.libjvmPath)
+        JvmBridge.runGameThread {
+            val status = JvmBridge.launch(
+                libjvm = File(request.libjvmPath),
+                jvmArgs = request.jvmArgs,
+                mainClass = request.mainClass,
+                gameArgs = request.gameArgs,
+            )
+            Timber.i("Game exited with %d", status)
         }
     }
 
@@ -81,6 +123,10 @@ class GameActivity : ComponentActivity() {
         GlfwBridge.sendKey(0, 0, GlfwBridge.Action.PRESS)
     }
 
+    companion object {
+        const val LAUNCH_REQUEST_FILE = "launch_request.json"
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         surfaceView = null
@@ -91,13 +137,14 @@ class GameActivity : ComponentActivity() {
 private fun GameScreen(
     onSurfaceCreated: (SurfaceView) -> Unit,
     onOpenMenu: () -> Unit,
+    onSurfaceReady: () -> Unit = {},
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 SurfaceView(context).also { view ->
-                    view.holder.addCallback(GameSurfaceCallback())
+                    view.holder.addCallback(GameSurfaceCallback(onSurfaceReady))
                     onSurfaceCreated(view)
                 }
             },
@@ -117,7 +164,7 @@ private fun GameScreen(
  * the activity is backgrounded — so the shim swaps the EGL window surface underneath the live
  * context rather than tearing the context down and losing every GL object with it.
  */
-private class GameSurfaceCallback : SurfaceHolder.Callback {
+private class GameSurfaceCallback(private val onSurfaceReady: () -> Unit) : SurfaceHolder.Callback {
 
     @SuppressLint("UnsafeOptInUsageError")
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -127,6 +174,7 @@ private class GameSurfaceCallback : SurfaceHolder.Callback {
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Timber.i("Game surface: %dx%d", width, height)
         GlfwBridge.setSurface(holder.surface, width, height)
+        onSurfaceReady()
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {

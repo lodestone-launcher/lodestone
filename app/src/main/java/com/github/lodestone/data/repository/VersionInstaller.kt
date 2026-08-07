@@ -81,6 +81,10 @@ class VersionInstaller(
         version
     }
 
+    /** Resolves an already-installed version from the on-disk manifests, without downloading. */
+    suspend fun resolve(entry: VersionEntry, environment: LaunchEnvironment): ResolvedVersion =
+        withContext(Dispatchers.IO) { VersionResolver.resolve(entry.id, cachingSource(entry)) }
+
     /**
      * Resolves version manifests, caching each one on disk under the layout the official launcher
      * uses so an existing installation can be adopted and so mod loaders can find their parents.
