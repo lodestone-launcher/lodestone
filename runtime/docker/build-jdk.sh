@@ -23,6 +23,7 @@ while [[ $# -gt 0 ]]; do
         --tag) TAG="$2"; shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
         --jobs) JOBS="$2"; shift 2 ;;
+        --clean) CLEAN_BUILD=1; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -135,7 +136,12 @@ BOOT_JDK="${BOOT_JDK_ROOT}/jdk-${FEATURE}"
 # Configure
 # ---------------------------------------------------------------------------------------------
 BUILD_DIR="${SRC}/build/android-${ABI}"
-rm -rf "${BUILD_DIR}"
+# Deliberately kept between runs. OpenJDK reconfigures happily into an existing build directory and
+# make skips what is already up to date, which turns a one-line patch fix from a full rebuild of
+# ~1200 HotSpot objects into a couple of minutes. Pass --clean to start over.
+if [[ "${CLEAN_BUILD:-0}" == "1" ]]; then
+    rm -rf "${BUILD_DIR}"
+fi
 
 # bionic folds pthread, rt and dl into libc, so the separate -l flags OpenJDK emits do not resolve.
 # `-landroid -llog` give the VM access to the platform logger for its own diagnostics.

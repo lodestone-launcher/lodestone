@@ -1,0 +1,27 @@
+diff --git a/src/hotspot/share/utilities/elfFile.hpp b/src/hotspot/share/utilities/elfFile.hpp
+index 579837ebf..097eb4447 100644
+--- a/src/hotspot/share/utilities/elfFile.hpp
++++ b/src/hotspot/share/utilities/elfFile.hpp
+@@ -31,6 +31,22 @@
+ #include <sys/exec_elf.h>
+ #else
+ #include <elf.h>
++
++// Android's <elf.h> reaches these through <linux/elf.h>, where they are not visible to the
++// redefinitions below. The ELF specification defines a symbol's type and binding as the low and
++// high nibbles of st_info, so supplying them here is exact rather than approximate.
++#ifndef ELF64_ST_TYPE
++#define ELF64_ST_TYPE(info) ((info) & 0xf)
++#endif
++#ifndef ELF32_ST_TYPE
++#define ELF32_ST_TYPE(info) ((info) & 0xf)
++#endif
++#ifndef ELF64_ST_BIND
++#define ELF64_ST_BIND(info) ((info) >> 4)
++#endif
++#ifndef ELF32_ST_BIND
++#define ELF32_ST_BIND(info) ((info) >> 4)
++#endif
+ #endif
+ #include <stdio.h>
+ 
