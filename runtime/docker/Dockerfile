@@ -57,6 +57,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libx11-dev libxext-dev libxrender-dev libxrandr-dev libxtst-dev libxt-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# `configure` resolves java.desktop's dependencies inside the target sysroot, not on the build
+# host, so the packages installed above are invisible to it. Android has none of these libraries
+# and never will — but OpenJDK only needs their headers to compile, because it `dlopen`s every one
+# of them lazily at runtime. Staging the headers therefore gets a clean cross build, and the
+# corresponding features simply report themselves unavailable on-device.
+#
+# ALSA additionally needs a stub library, because libjsound is the one component that links
+# `-lasound` rather than loading it dynamically.
+#
+# Nothing Minecraft does is affected: audio goes through OpenAL, and there is no printing, no X
+# server and no desktop toolkit on a phone.
+RUN set -eux; \
+    SYSROOT="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"; \
+    for headers in alsa cups fontconfig X11 freetype2; do \
+        [ -e "/usr/include/${headers}" ] && cp -r "/usr/include/${headers}" "${SYSROOT}/usr/include/" || true; \
+    done; \
+    echo 'void __lodestone_alsa_unavailable(void) {}' > /tmp/alsa_stub.c; \
+    "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
+        -shared -fPIC -Wl,-soname,libasound.so.2 \
+        -o "${SYSROOT}/usr/lib/aarch64-linux-android/26/libasound.so" /tmp/alsa_stub.c; \
+    rm /tmp/alsa_stub.c
+
 COPY build-jdk.sh /usr/local/bin/build-jdk.sh
 RUN chmod +x /usr/local/bin/build-jdk.sh
 

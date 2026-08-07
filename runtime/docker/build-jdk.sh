@@ -100,7 +100,15 @@ if [[ ! -d "${SRC}" ]]; then
     fi
 fi
 
-# Patches are applied to a pristine checkout every run so a rebuild is reproducible.
+# The source tree is a mounted volume that survives between runs, so it has to be reset before
+# patching or an edited patch would be silently skipped as "previously applied" and the build would
+# quietly use the old version.
+if [[ -d "${SRC}/.git" ]]; then
+    echo "==> Resetting ${SRC} to a pristine checkout"
+    git -C "${SRC}" checkout -- .
+    git -C "${SRC}" clean -fd -e build >/dev/null
+fi
+
 PATCH_DIR="${PATCH_ROOT}/jdk${FEATURE}"
 if [[ -d "${PATCH_DIR}" ]]; then
     echo "==> Applying patches from ${PATCH_DIR}"
@@ -165,6 +173,16 @@ CONFIGURE_ARGS=(
     "--with-extra-ldflags=${EXTRA_LDFLAGS[*]}"
     # Android has no DTrace and no CDS archive to dump at build time on a foreign architecture.
     "--with-jvm-features=-dtrace"
+    # freetype is the one java.desktop dependency OpenJDK links rather than dlopens, so staging
+    # headers cannot satisfy it and there is no aarch64-android library to link against. OpenJDK
+    # carries its own freetype source for exactly this case; building it for the target sidesteps
+    # the host library entirely.
+    "--with-freetype=bundled"
+    # Same reasoning: both are vendored, and the system copies in the image are x86_64.
+    "--with-libjpeg=bundled"
+    "--with-giflib=bundled"
+    "--with-libpng=bundled"
+    "--with-zlib=bundled"
     # configure prints "Ignoring value of CC from the environment. Use command line variables
     # instead" and then picks up the host gcc, so every tool has to be passed as an assignment.
     "CC=${CC}"
