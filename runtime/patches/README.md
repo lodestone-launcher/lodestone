@@ -36,6 +36,35 @@ portable for musl and for the platforms that lack these APIs:
   `#error "glibc too old (< 2.3.2)"` guard. Adds a `__BIONIC__` branch alongside the existing
   `MUSL_LIBC` one. Verified to apply cleanly with `git apply --check`.
 
+### Blockers found by actually running the build
+
+These came out of real `configure` runs in the Docker image, in the order they appeared.
+
+1. **Toolchain discarded from the environment.** `configure` prints *"Ignoring value of CC from the
+   environment. Use command line variables instead"* and then silently falls back to the host gcc,
+   so the NDK toolchain was never used. Fixed by passing `CC=`, `CXX=`, `AR=` and the rest as
+   configure assignments rather than exports.
+2. **Build compiler must match the target toolchain.** With `--with-toolchain-type=clang`, a gcc
+   *build* compiler is rejected outright. Fixed by installing clang and pointing `BUILD_CC` /
+   `BUILD_CXX` at it.
+3. **ALSA — still open.** `java.desktop` requires ALSA even under `--enable-headless-only`, and
+   installing `libasound2-dev` on the build host does *not* satisfy it: this is a cross build, so
+   `configure` looks inside the target sysroot given by `--with-sysroot`, where Android has no ALSA
+   at all and never will.
+
+   Three ways forward, in order of preference:
+
+   - Point `--with-alsa-include` at the host headers. They are architecture-independent, so this
+     gets past configure — but `libjsound` links `-lasound`, so expect the failure to move to the
+     link step, where there is no aarch64-android library to satisfy it.
+   - Stage the ALSA headers plus a stub `libasound.so` built for the target into the sysroot. Ugly,
+     but it keeps the module building and `libjsound` merely fails to dlopen at runtime.
+   - Drop the sound provider from `java.desktop` with a patch. The most honest option: Minecraft
+     drives all audio through OpenAL, so nothing the game does touches `javax.sound`.
+
+   The third is probably right, but it needs a patch written against the `java.desktop` makefiles
+   rather than a configure flag.
+
 ### Still expected, to be confirmed by a real build
 
 These have not been reproduced yet — the first CI run is what turns them into concrete errors with
