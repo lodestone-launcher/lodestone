@@ -2,6 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Vulkan is only used when a version ships its own Vulkan renderer, so it must not gate
+         installation on devices that can still run the OpenGL path. -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
     <application
         android:name=".LodestoneApplication"
         android:allowBackup="true"
@@ -24,6 +33,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The game runs in its own process: the hosted JVM installs its own signal handlers and
+             terminates the process outright when Minecraft calls System.exit, which would take the
+             launcher UI down with it if they shared one. -->
+        <activity
+            android:name=".ui.game.GameActivity"
+            android:process=":game"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:resizeableActivity="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="false"
+            android:theme="@style/Theme.Lodestone"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize" />
     </application>
 
 </manifest>
