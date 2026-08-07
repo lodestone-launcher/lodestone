@@ -123,19 +123,45 @@ for abi in "${ABIS[@]}"; do
     mkdir -p "${out}"
 
     core="${LWJGL_SRC}/modules/lwjgl/core/src"
+    # LWJGL generates one JNI accessor per libffi calling convention across every architecture it
+    # supports, but each `ffitarget.h` defines only its own. On aarch64 that leaves ten undefined.
+    # They are separate functions rather than switch cases, so mapping them onto a defined sentinel
+    # simply makes them dead code — the aarch64 Java side never asks for an x86 or ARM32 ABI.
+    absent_abis=()
+    case "${abi}" in
+        arm64-v8a)
+            for name in FFI_GNUW64 FFI_UNIX64 FFI_EFI64 FFI_STDCALL FFI_THISCALL \
+                        FFI_FASTCALL FFI_MS_CDECL FFI_PASCAL FFI_REGISTER FFI_VFP; do
+                absent_abis+=("-D${name}=FFI_LAST_ABI")
+            done
+            ;;
+        x86_64)
+            for name in FFI_STDCALL FFI_THISCALL FFI_FASTCALL FFI_PASCAL FFI_REGISTER FFI_VFP; do
+                absent_abis+=("-D${name}=FFI_LAST_ABI")
+            done
+            ;;
+    esac
+
     common_flags=(
         -O2 -fPIC -shared -fvisibility=hidden
         -DLWJGL_LINUX -D_GNU_SOURCE
+        "${absent_abis[@]}"
         -I"${core}/main/c"
+        # `common_tools.h` includes "LinuxConfig.h" unqualified, so the platform directory has to
+        # be on the include path in its own right rather than reached through a prefix.
+        -I"${core}/main/c/linux"
         -I"${core}/generated/c"
+        -I"${core}/generated/c/linux"
         -I"${ffi_prefix}/include"
-        -I"${TOOLCHAIN}/sysroot/usr/include"
     )
 
+    # The generated linux sources bind io_uring, which bionic does not ship a userspace library
+    # for; Minecraft never touches those paths, so they are left out rather than stubbed.
     # shellcheck disable=SC2046
     "${CC}" "${common_flags[@]}" \
         $(find "${core}/main/c" -maxdepth 1 -name '*.c') \
         $(find "${core}/generated/c" -maxdepth 1 -name '*.c') \
+        $(find "${core}/generated/c/linux" -maxdepth 1 -name '*.c' -not -name '*uring*') \
         "${ffi_prefix}/lib/libffi.a" \
         -ldl -llog \
         -o "${out}/liblwjgl.so"
