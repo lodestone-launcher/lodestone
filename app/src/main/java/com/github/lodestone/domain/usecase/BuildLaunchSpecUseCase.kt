@@ -123,7 +123,17 @@ class BuildLaunchSpecUseCase(
      * would arrive at one and EGL would run in the other.
      */
     private fun overrideExtractedNatives(from: File, to: File) {
-        val natives = listOf("liblwjgl.so", "liblwjgl_opengl.so", "liblwjgl_stb.so")
+        // `libfreetype.so` and `libopenal.so` carry no `lwjgl_` prefix because LWJGL's freetype and
+        // openal bindings dispatch through libffi rather than through a JNI stub of their own, so
+        // the natives jar ships the third-party library itself.
+        val natives = listOf(
+            "liblwjgl.so",
+            "liblwjgl_opengl.so",
+            "liblwjgl_stb.so",
+            "liblwjgl_tinyfd.so",
+            "libfreetype.so",
+            "libopenal.so",
+        )
         for (name in natives) {
             val source = File(from, name)
             if (!source.isFile) {
