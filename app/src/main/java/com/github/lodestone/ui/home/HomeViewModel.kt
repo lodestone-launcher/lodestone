@@ -131,7 +131,7 @@ class HomeViewModel(
                     version = version,
                     account = offlineAccount(),
                     environment = environment,
-                    options = LaunchOptions(),
+                    options = LaunchOptions(verboseVmStartup = BuildConfig.DEBUG),
                     nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
                 )
                 when (result) {

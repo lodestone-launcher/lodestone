@@ -70,6 +70,13 @@ class BuildLaunchSpecUseCase(
             // An embedder calling JNI_CreateJavaVM gets no such help, and without it HotSpot cannot
             // find lib/modules and dies with a bare "Error occurred during initialization of VM".
             add("-Djava.home=${javaHome.absolutePath}")
+            if (options.verboseVmStartup) {
+                // HotSpot's unified logging, aimed at stderr so the stdio mirror captures it. A VM
+                // that dies during initialisation often does so without printing anything on its
+                // own, and this is the only way to see how far it got.
+                add("-Xlog:init=debug:stderr")
+                add("-Xlog:os,os+thread=info:stderr")
+            }
             addAll(argumentBuilder.buildJvmArgs(version, environment, paths, options))
             addAll(runtimes.lwjglProperties(nativesDirectory))
         }

@@ -41,6 +41,8 @@ data class LaunchOptions(
     val extraJvmArgs: List<String> = emptyList(),
     val demo: Boolean = false,
     val renderer: Renderer = Renderer.AUTO,
+    /** Turns on HotSpot's own startup logging, for diagnosing a VM that will not come up. */
+    val verboseVmStartup: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_MAX_MEMORY_MB = 1024
