@@ -1,0 +1,18 @@
+diff --git a/make/autoconf/flags-cflags.m4 b/make/autoconf/flags-cflags.m4
+--- a/make/autoconf/flags-cflags.m4
++++ b/make/autoconf/flags-cflags.m4
+@@ -67,7 +67,13 @@
+       SHARED_LIBRARY_FLAGS='-shared'
+       SET_EXECUTABLE_ORIGIN='-Wl,-rpath,\$$ORIGIN[$]1'
+       if test "x$OPENJDK_TARGET_OS" = xlinux; then
+-        SET_EXECUTABLE_ORIGIN="$SET_EXECUTABLE_ORIGIN -Wl,--disable-new-dtags"
++        # JDK-8326891 forces DT_RPATH here so that LD_LIBRARY_PATH cannot be used to substitute
++        # the JDK's own libraries. Android's dynamic linker ignores DT_RPATH outright and honours
++        # only DT_RUNPATH, so on bionic that hardening leaves the rpath with no reader at all and
++        # every intra-JDK dependency becomes unresolvable -- libnio.so cannot find the libnet.so
++        # sitting next to it. DT_RUNPATH is the only tag that works, so the JDK is linked with it
++        # and the substitution concern is handled by the app owning its own private data dir.
++        SET_EXECUTABLE_ORIGIN="$SET_EXECUTABLE_ORIGIN -Wl,--enable-new-dtags"
+       fi
+       SET_SHARED_LIBRARY_NAME='-Wl,-soname=[$]1'
+       SET_SHARED_LIBRARY_MAPFILE='-Wl,-version-script=[$]1'

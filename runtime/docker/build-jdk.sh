@@ -160,14 +160,10 @@ EXTRA_CFLAGS=(
 EXTRA_LDFLAGS=(
     "-landroid"
     "-llog"
-    # No -rpath entries on purpose. bionic ignores DT_RPATH outright and honours only DT_RUNPATH,
-    # and getting $ORIGIN through the shell, make, and the shell make invokes takes a different
-    # number of escapes at each layer — the attempts produced "RIGIN" and then a bare "/..".
-    #
-    # They are not needed. jvm_bridge.cpp opens libjvm.so by absolute path with RTLD_GLOBAL before
-    # the VM starts, which registers it in the app's linker namespace under its soname, so
-    # libjava.so's `NEEDED libjvm.so` resolves from there. LD_LIBRARY_PATH set by
-    # JavaRuntimeManager covers the rest of the runtime's libraries.
+    # No -rpath entries here on purpose. OpenJDK already emits `-Wl,-rpath,$ORIGIN` for every
+    # library it links, and appends `-Wl,--disable-new-dtags` after this list, so an
+    # `--enable-new-dtags` added here would simply be overridden. The 0006 patch flips that flag
+    # at its source instead, which also spares us re-deriving OpenJDK's `\$$ORIGIN` escaping.
     "-Wl,--allow-shlib-undefined"
     # HotSpot's version script names symbols that do not survive optimisation — vtables for classes
     # local to the WhiteBox test functions. GNU ld warns about those; lld now defaults to
