@@ -113,10 +113,13 @@ class JavaRuntimeManager(private val files: GameFiles) {
      * This is the whole reason no LWJGL patching is needed: its `opengl` and `glfw` modules are pure
      * Java that `dlopen`s whatever these name.
      */
-    fun lwjglProperties(nativesDirectory: File): List<String> = listOf(
+    fun lwjglProperties(nativesDirectory: File, shimDirectory: File): List<String> = listOf(
         "-Dorg.lwjgl.librarypath=${nativesDirectory.absolutePath}",
-        "-Dorg.lwjgl.glfw.libname=${File(nativesDirectory, "liblodestone_glfw.so").absolutePath}",
-        "-Dorg.lwjgl.opengl.libname=${File(nativesDirectory, "libgl4es.so").absolutePath}",
+        // Named where the APK unpacked them, which is where the Activity loaded the GLFW shim from.
+        // The linker treats two paths to the same library as two libraries, and the shim's window
+        // state has to be the one the Activity is feeding the surface into.
+        "-Dorg.lwjgl.glfw.libname=${File(shimDirectory, "liblodestone_glfw.so").absolutePath}",
+        "-Dorg.lwjgl.opengl.libname=${File(shimDirectory, "libgl4es.so").absolutePath}",
         // jemalloc is not cross-compiled: LWJGL falls back to the platform allocator, and bionic's
         // is a scudo/jemalloc hybrid already.
         "-Dorg.lwjgl.system.allocator=system",

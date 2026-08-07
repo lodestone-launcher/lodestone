@@ -43,10 +43,10 @@ class BuildLaunchSpecUseCase(
         val nativesDirectory = files.nativesDirectory(version.id)
         nativesDirectory.mkdirs()
 
-        // The shims ship inside the APK, but LWJGL and the JVM load libraries from one directory.
-        // Linking them alongside the extracted natives is what lets `-Dorg.lwjgl.glfw.libname`
-        // resolve without copying tens of megabytes on every launch.
-        linkShims(nativeLibraryDir, nativesDirectory)
+        // Mojang's manifests carry Linux natives for x86-64 only, so the ones the version installer
+        // unpacked cannot be loaded here at all. The cross-built replacements ride in the APK and
+        // have to sit beside them, because `org.lwjgl.librarypath` names a single directory.
+        overrideExtractedNatives(nativeLibraryDir, nativesDirectory)
 
         val classpath = buildList {
             version.classpathLibraries(environment).forEach { add(files.library(it.path)) }
@@ -78,10 +78,15 @@ class BuildLaunchSpecUseCase(
                 // HotSpot's unified logging, aimed at stderr so the stdio mirror captures it. A VM
                 // that dies during initialisation often does so without printing anything on its
                 // own, and this is the only way to see how far it got.
-                add("-Xlog:all=debug:stderr")
+                //
+                // Deliberately not `all=debug`: that writes a quarter of a gigabyte before the game
+                // reaches its title screen, and the cost of formatting it dominates startup. The
+                // `library` tag is the one that earns its place here, because it traces every
+                // dlopen the VM performs — which is exactly how the shims are diagnosed.
+                add("-Xlog:all=warning,library=info:stderr")
             }
             addAll(argumentBuilder.buildJvmArgs(version, environment, paths, options))
-            addAll(runtimes.lwjglProperties(nativesDirectory))
+            addAll(runtimes.lwjglProperties(nativesDirectory, nativeLibraryDir))
         }
         val gameArgs = argumentBuilder.buildGameArgs(version, environment, paths, account, options)
 
@@ -104,15 +109,20 @@ class BuildLaunchSpecUseCase(
     }
 
     /**
-     * Makes the APK's bundled shims visible from the natives directory.
+     * Replaces the version's unpacked LWJGL natives with the cross-built ones from the APK.
      *
      * Copied rather than linked: `nativeLibraryDir` and app storage are frequently different
      * filesystems, so a hard link cannot be relied on. A failure here is deliberately not fatal —
      * the launch proceeds and reports a missing library, which is easier to diagnose.
+     *
+     * The shims themselves are pointedly *not* copied here. `liblodestone_glfw.so` is already loaded
+     * by the Activity to receive the surface, and the linker keys a mapping on its path: a second
+     * copy under a second path would be a second library, with its own window state, so the surface
+     * would arrive at one and EGL would run in the other.
      */
-    private fun linkShims(from: File, to: File) {
-        val shims = listOf("liblodestone_glfw.so", "libgl4es.so", "liblwjgl.so", "liblwjgl_stb.so")
-        for (name in shims) {
+    private fun overrideExtractedNatives(from: File, to: File) {
+        val natives = listOf("liblwjgl.so", "liblwjgl_opengl.so", "liblwjgl_stb.so")
+        for (name in natives) {
             val source = File(from, name)
             if (!source.isFile) {
                 continue
