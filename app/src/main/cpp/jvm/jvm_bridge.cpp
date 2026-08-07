@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -120,6 +121,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_JvmBridge_na
         JNIEnv* env,
         jclass,
         jstring libjvmPathString,
+        jstring workingDirectoryString,
         jobjectArray vmArgsArray,
         jstring mainClassString,
         jobjectArray mainArgsArray) {
@@ -139,6 +141,18 @@ extern "C" JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_JvmBridge_na
 
     const StringArray vmArgs(env, vmArgsArray);
     const StringArray mainArgs(env, mainArgsArray);
+
+    // Android starts an app process in `/`, and Minecraft resolves `logs/`, `saves/`, `options.txt`
+    // and its resource packs against the working directory. `-Duser.dir` only changes what the
+    // property reports — every actual file operation still goes through the process-wide cwd — so
+    // the real chdir has to happen here, before the VM caches anything derived from it.
+    const char* workingDirectory = env->GetStringUTFChars(workingDirectoryString, nullptr);
+    if (workingDirectory != nullptr) {
+        if (chdir(workingDirectory) != 0) {
+            LOGE("chdir(%s) failed: %s", workingDirectory, strerror(errno));
+        }
+        env->ReleaseStringUTFChars(workingDirectoryString, workingDirectory);
+    }
 
     // Opened before libjvm so that it is already in the namespace's global group by the time the
     // VM starts pulling in the runtime's own libraries. What puts it there is the DF_1_GLOBAL flag

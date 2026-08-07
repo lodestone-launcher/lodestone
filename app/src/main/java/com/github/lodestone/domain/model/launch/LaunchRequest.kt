@@ -18,6 +18,8 @@ data class LaunchRequest(
     val jvmArgs: List<String>,
     val gameArgs: List<String>,
     val libjvmPath: String,
+    /** Becomes the process working directory, which is what the game resolves relative paths on. */
+    val gameDirectory: String,
     val environment: Map<String, String>,
 ) {
     fun writeTo(file: File) {
@@ -32,6 +34,7 @@ data class LaunchRequest(
             jvmArgs = spec.jvmArgs,
             gameArgs = spec.gameArgs,
             libjvmPath = spec.libjvm.absolutePath,
+            gameDirectory = spec.gameDirectory.absolutePath,
             environment = spec.environment,
         )
 

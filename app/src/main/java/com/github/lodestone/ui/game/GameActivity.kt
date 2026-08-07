@@ -89,6 +89,7 @@ class GameActivity : ComponentActivity() {
         JvmBridge.runGameThread {
             val status = JvmBridge.launch(
                 libjvm = File(request.libjvmPath),
+                workingDirectory = File(request.gameDirectory),
                 jvmArgs = request.jvmArgs,
                 mainClass = request.mainClass,
                 gameArgs = request.gameArgs,

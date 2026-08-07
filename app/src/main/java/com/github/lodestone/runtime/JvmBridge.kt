@@ -55,10 +55,15 @@ object JvmBridge {
      * exits. Returns 0 on a clean return, 1 if main threw, and a negative code if the VM or the
      * main class could not be brought up.
      *
+     * The process changes directory to [workingDirectory] first, which is the whole reason this
+     * takes it: the game directory is where Minecraft expects to find and create everything it
+     * addresses by a relative path.
+     *
      * Call this from the thread created by [runGameThread], never from an ordinary one.
      */
     fun launch(
         libjvm: File,
+        workingDirectory: File,
         jvmArgs: List<String>,
         mainClass: String,
         gameArgs: List<String>,
@@ -66,6 +71,7 @@ object JvmBridge {
         ensureLoaded()
         return nativeLaunch(
             libjvm.absolutePath,
+            workingDirectory.absolutePath,
             toInitOptions(jvmArgs).toTypedArray(),
             mainClass,
             gameArgs.toTypedArray(),
@@ -119,6 +125,7 @@ object JvmBridge {
     @JvmStatic
     private external fun nativeLaunch(
         libjvmPath: String,
+        workingDirectory: String,
         jvmArgs: Array<String>,
         mainClass: String,
         gameArgs: Array<String>,
