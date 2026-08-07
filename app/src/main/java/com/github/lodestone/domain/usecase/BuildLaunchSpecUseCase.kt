@@ -64,7 +64,12 @@ class BuildLaunchSpecUseCase(
             loggingConfig = version.logging?.let { File(files.logConfigs, it.file.id) },
         )
 
+        val javaHome = runtimes.runtimeRoot(feature)
         val jvmArgs = buildList {
+            // The `java` launcher derives java.home from its own location and hands it to the VM.
+            // An embedder calling JNI_CreateJavaVM gets no such help, and without it HotSpot cannot
+            // find lib/modules and dies with a bare "Error occurred during initialization of VM".
+            add("-Djava.home=${javaHome.absolutePath}")
             addAll(argumentBuilder.buildJvmArgs(version, environment, paths, options))
             addAll(runtimes.lwjglProperties(nativesDirectory))
         }
@@ -79,7 +84,7 @@ class BuildLaunchSpecUseCase(
                 jvmArgs = jvmArgs,
                 gameArgs = gameArgs,
                 libjvm = libjvm,
-                javaHome = runtimes.runtimeRoot(feature),
+                javaHome = javaHome,
                 gameDirectory = files.root,
                 nativesDirectory = nativesDirectory,
                 libraryPath = listOf(nativesDirectory, nativeLibraryDir),

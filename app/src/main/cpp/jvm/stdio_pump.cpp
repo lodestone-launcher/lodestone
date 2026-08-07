@@ -20,6 +20,7 @@ std::atomic_bool g_installed{false};
 
 struct PumpState {
     int readFd;
+    FILE* mirror = nullptr;
     jobject sink;       // global ref to a java.util.function.Consumer-shaped object
     jmethodID acceptId; // void accept(String)
 };
@@ -33,6 +34,16 @@ void emitLine(JNIEnv* env, PumpState* state, const char* data, size_t length) {
         return;
     }
     __android_log_print(ANDROID_LOG_INFO, "Minecraft", "%.*s", static_cast<int>(length), data);
+
+    // Mirrored to a file, flushed per line. HotSpot reports a fatal startup problem by printing to
+    // stderr and calling exit() immediately, which tears the process down before this thread can
+    // drain the pipe — so the one message explaining the failure is exactly the message logcat
+    // never receives. The file survives.
+    if (state->mirror != nullptr) {
+        fwrite(data, 1, length, state->mirror);
+        fputc('\n', state->mirror);
+        fflush(state->mirror);
+    }
 
     std::string owned(data, length);
     jstring text = env->NewStringUTF(owned.c_str());
@@ -129,7 +140,10 @@ bool startStdioPump(JNIEnv* env, jobject sink) {
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
 
-    auto* state = new PumpState{fds[0], env->NewGlobalRef(sink), acceptId};
+    auto* state = new PumpState{fds[0], nullptr, env->NewGlobalRef(sink), acceptId};
+    if (const char* path = getenv("LODESTONE_STDIO_LOG")) {
+        state->mirror = fopen(path, "w");
+    }
 
     pthread_t thread;
     pthread_attr_t attributes;

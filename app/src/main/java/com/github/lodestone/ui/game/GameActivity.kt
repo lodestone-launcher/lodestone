@@ -80,6 +80,8 @@ class GameActivity : ComponentActivity() {
         }
         started = true
 
+        // Set before the pump starts, since the pump reads it when installing the redirect.
+        JvmBridge.setEnv("LODESTONE_STDIO_LOG", File(filesDir, "jvm_stdio.log").absolutePath)
         JvmBridge.startStdioPump { line -> Timber.tag("Minecraft").i(line) }
         request.environment.forEach { (key, value) -> JvmBridge.setEnv(key, value) }
 
