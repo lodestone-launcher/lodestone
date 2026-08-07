@@ -61,10 +61,13 @@ class GameActivity : ComponentActivity() {
     /**
      * Boots the VM once, after the surface exists.
      *
-     * Order matters: the stdio pump has to be installed before the VM starts, because HotSpot
-     * captures the descriptors as it comes up and anything it writes beforehand is lost. The launch
-     * itself blocks until the game exits, so it runs on a thread sized for HotSpot's primordial
-     * stack rather than on the main thread.
+     * Order matters. The stdio pump has to be installed before the VM starts, because HotSpot
+     * captures the descriptors as it comes up and anything it writes beforehand is lost. The
+     * translation layer has to be opened here too, on this thread: gl4es probes the driver from an
+     * ELF constructor and leaves no EGL context current on whichever thread ran it, so if LWJGL is
+     * the one to open it the game loses the context it has just made current and dies building its
+     * first framebuffer. The launch itself blocks until the game exits, so it runs on a thread
+     * sized for HotSpot's primordial stack rather than on the main thread.
      */
     @Synchronized
     private fun startGame() {
@@ -84,6 +87,9 @@ class GameActivity : ComponentActivity() {
         JvmBridge.setEnv("LODESTONE_STDIO_LOG", File(filesDir, "jvm_stdio.log").absolutePath)
         JvmBridge.startStdioPump { line -> Timber.tag("Minecraft").i(line) }
         request.environment.forEach { (key, value) -> JvmBridge.setEnv(key, value) }
+        request.translationLayerPath?.let { path ->
+            Timber.i("Translation layer %s loaded: %b", path, GlfwBridge.loadTranslationLayer(path))
+        }
 
         Timber.i("Launching %s via %s", request.versionId, request.libjvmPath)
         JvmBridge.runGameThread {

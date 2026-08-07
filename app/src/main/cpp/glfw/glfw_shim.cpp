@@ -1,15 +1,56 @@
 #include "glfw/glfw_shim.h"
 
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
 #include <jni.h>
+
+#include <cstdlib>
 
 #include "common/log.h"
 
 namespace lodestone::glfw {
+namespace {
+
+std::mutex g_layerMutex;
+void* g_layer = nullptr;
+bool g_layerOpened = false;
+
+} // namespace
 
 WindowState& state() {
     static WindowState instance;
     return instance;
+}
+
+void* loadTranslationLayer(const char* path) {
+    std::lock_guard<std::mutex> lock(g_layerMutex);
+    if (g_layerOpened) {
+        return g_layer;
+    }
+    g_layerOpened = true;
+
+    // gl4es reads these to find the drivers it forwards to. Setting them here rather than baking
+    // them in at build time keeps one binary working across vendors, and they have to be in the
+    // environment before the constructor runs.
+    setenv("LIBGL_GLES", "libGLESv2.so", 0);
+    setenv("LIBGL_EGL", "libEGL.so", 0);
+    // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and its
+    // shader conversion path is what matters.
+    setenv("LIBGL_NOBANNER", "1", 0);
+
+    // RTLD_GLOBAL so that LWJGL's own `dlsym(RTLD_DEFAULT, "glFoo")` lookups also land here.
+    g_layer = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    if (g_layer == nullptr) {
+        LOGE("translation layer %s not available: %s", path, dlerror());
+    } else {
+        LOGI("translation layer %s loaded", path);
+    }
+    return g_layer;
+}
+
+void* translationLayer() {
+    std::lock_guard<std::mutex> lock(g_layerMutex);
+    return g_layer;
 }
 
 void postEvent(const Event& event) {
@@ -46,6 +87,15 @@ void recordMouseButton(int button, int action) {
 } // namespace
 
 extern "C" {
+
+JNIEXPORT jboolean JNICALL
+Java_com_github_lodestone_runtime_GlfwBridge_nativeLoadTranslationLayer(
+        JNIEnv* env, jclass, jstring path) {
+    const char* chars = env->GetStringUTFChars(path, nullptr);
+    void* handle = lodestone::glfw::loadTranslationLayer(chars);
+    env->ReleaseStringUTFChars(path, chars);
+    return handle != nullptr ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT void JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSetSurface(
         JNIEnv* env, jclass, jobject surface, jint width, jint height) {

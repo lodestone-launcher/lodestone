@@ -40,6 +40,20 @@ object GlfwBridge {
     }
 
     /**
+     * Opens the desktop-GL translation layer named by [path].
+     *
+     * Call this before the VM starts and never from the render thread. gl4es probes the driver from
+     * an ELF constructor and leaves no context current on whichever thread triggered the load, so
+     * letting LWJGL be the one to open it unbinds the context Minecraft has just made current — the
+     * game then dies building its first framebuffer. Opened here, LWJGL's own `dlopen` finds the
+     * library already loaded and the constructor does not run again.
+     */
+    fun loadTranslationLayer(path: String): Boolean {
+        ensureLoaded()
+        return nativeLoadTranslationLayer(path)
+    }
+
+    /**
      * Hands the shim the surface to render into, or null when it goes away.
      *
      * The game's render thread keeps running across a surface change, so the shim swaps the EGL
@@ -119,6 +133,9 @@ object GlfwBridge {
         ensureLoaded()
         nativeRequestClose()
     }
+
+    @JvmStatic
+    private external fun nativeLoadTranslationLayer(path: String): Boolean
 
     @JvmStatic
     private external fun nativeSetSurface(surface: Surface?, width: Int, height: Int)

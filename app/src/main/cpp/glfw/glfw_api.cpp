@@ -6,11 +6,11 @@
 // missing symbol would fail the whole `dlopen` and take the game down before it starts.
 
 #include <EGL/egl.h>
+#include <GLES3/gl3.h>
 #include <android/native_window.h>
 #include <dlfcn.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
@@ -39,35 +39,6 @@ using WindowSizeCallback = void (*)(GLFWwindow*, int, int);
 using WindowFocusCallback = void (*)(GLFWwindow*, int);
 using WindowCloseCallback = void (*)(GLFWwindow*);
 using ErrorCallback = void (*)(int, const char*);
-
-/**
- * The desktop-GL translation layer, opened once and kept for the process's lifetime.
- *
- * Minecraft asks for desktop OpenGL, which Android does not have. gl4es exports the desktop entry
- * points and rewrites them onto GLES underneath, so `glfwGetProcAddress` has to resolve against it
- * rather than against the system EGL — `eglGetProcAddress` would only ever return GLES functions.
- */
-void* translationLayer() {
-    static void* handle = [] {
-        // gl4es reads these to find the drivers it forwards to. Setting them here rather than
-        // baking them in at build time keeps one binary working across vendors.
-        setenv("LIBGL_GLES", "libGLESv2.so", 0);
-        setenv("LIBGL_EGL", "libEGL.so", 0);
-        // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
-        // its shader conversion path is what matters.
-        setenv("LIBGL_NOBANNER", "1", 0);
-
-        // RTLD_GLOBAL so that LWJGL's own `dlsym(RTLD_DEFAULT, "glFoo")` lookups also land here.
-        void* library = dlopen("libgl4es.so", RTLD_NOW | RTLD_GLOBAL);
-        if (library == nullptr) {
-            LOGW("gl4es not available (%s); desktop GL calls will not resolve", dlerror());
-        } else {
-            LOGI("gl4es loaded for desktop GL translation");
-        }
-        return library;
-    }();
-    return handle;
-}
 
 double monotonicSeconds() {
     timespec now{};
@@ -120,6 +91,9 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
         return false;
     }
     eglSwapInterval(s.display, s.swapInterval.load());
+    // Logged once per bind rather than at init: it is the only place that can report what the
+    // driver actually gave us, and a context that goes missing later shows up as its absence.
+    LOGI("EGL context current: %s / %s", glGetString(GL_VERSION), glGetString(GL_RENDERER));
     return true;
 }
 
@@ -383,8 +357,8 @@ __attribute__((visibility("default"))) void glfwSwapInterval(int interval) {
 
 __attribute__((visibility("default"))) void* glfwGetProcAddress(const char* name) {
     // The translation layer first: it owns the desktop entry points the game is asking for. EGL is
-    // only a fallback for the handful of extension functions gl4es passes straight through.
-    if (void* library = translationLayer()) {
+    // only a fallback for the handful of extension functions the layer passes straight through.
+    if (void* library = lodestone::glfw::translationLayer()) {
         if (void* symbol = dlsym(library, name)) {
             return symbol;
         }

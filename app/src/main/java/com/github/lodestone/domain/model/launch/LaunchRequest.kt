@@ -20,6 +20,8 @@ data class LaunchRequest(
     val libjvmPath: String,
     /** Becomes the process working directory, which is what the game resolves relative paths on. */
     val gameDirectory: String,
+    /** Opened by the game Activity before the VM starts; null when there is no layer to open. */
+    val translationLayerPath: String? = null,
     val environment: Map<String, String>,
 ) {
     fun writeTo(file: File) {
@@ -35,6 +37,7 @@ data class LaunchRequest(
             gameArgs = spec.gameArgs,
             libjvmPath = spec.libjvm.absolutePath,
             gameDirectory = spec.gameDirectory.absolutePath,
+            translationLayerPath = spec.translationLayer?.absolutePath,
             environment = spec.environment,
         )
 

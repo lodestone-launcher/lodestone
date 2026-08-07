@@ -1,6 +1,7 @@
 package com.github.lodestone.runtime
 
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.domain.model.launch.Renderer
 import com.github.lodestone.domain.model.version.JavaVersionRequirement
 import timber.log.Timber
 import java.io.File
@@ -113,19 +114,34 @@ class JavaRuntimeManager(private val files: GameFiles) {
      * This is the whole reason no LWJGL patching is needed: its `opengl` and `glfw` modules are pure
      * Java that `dlopen`s whatever these name.
      */
-    fun lwjglProperties(nativesDirectory: File, shimDirectory: File): List<String> = listOf(
-        "-Dorg.lwjgl.librarypath=${nativesDirectory.absolutePath}",
+    fun lwjglProperties(
+        nativesDirectory: File,
+        shimDirectory: File,
+        translationLayer: File?,
+    ): List<String> = buildList {
+        add("-Dorg.lwjgl.librarypath=${nativesDirectory.absolutePath}")
         // Named where the APK unpacked them, which is where the Activity loaded the GLFW shim from.
         // The linker treats two paths to the same library as two libraries, and the shim's window
         // state has to be the one the Activity is feeding the surface into.
-        "-Dorg.lwjgl.glfw.libname=${File(shimDirectory, "liblodestone_glfw.so").absolutePath}",
-        "-Dorg.lwjgl.opengl.libname=${File(shimDirectory, "libgl4es.so").absolutePath}",
+        add("-Dorg.lwjgl.glfw.libname=${File(shimDirectory, "liblodestone_glfw.so").absolutePath}")
+        // The same path the Activity already opened, so LWJGL's dlopen finds the library loaded
+        // rather than running its constructors a second time on the render thread.
+        translationLayer?.let { add("-Dorg.lwjgl.opengl.libname=${it.absolutePath}") }
         // jemalloc is not cross-compiled: LWJGL falls back to the platform allocator, and bionic's
         // is a scudo/jemalloc hybrid already.
-        "-Dorg.lwjgl.system.allocator=system",
+        add("-Dorg.lwjgl.system.allocator=system")
         // LWJGL probes for a debug console and stack traces it cannot get here.
-        "-Dorg.lwjgl.util.NoChecks=true",
-    )
+        add("-Dorg.lwjgl.util.NoChecks=true")
+    }
+
+    /**
+     * The translation layer [renderer] asks for, taking the first one actually packaged.
+     *
+     * Resolved against the APK's native library directory rather than the version's natives, so
+     * that adding Zink's libraries to the build is enough to switch to it.
+     */
+    fun translationLayer(shimDirectory: File, renderer: Renderer): File? =
+        renderer.libraryNames.map { File(shimDirectory, it) }.firstOrNull(File::isFile)
 
     private fun abiDirectory(): String =
         when (val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull()) {

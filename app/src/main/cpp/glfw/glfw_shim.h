@@ -132,4 +132,18 @@ WindowState& state();
 /** Queues an event for the next `glfwPollEvents`. Safe to call from any thread. */
 void postEvent(const Event& event);
 
+/**
+ * Opens the desktop-GL translation layer at [path], or returns the handle already open.
+ *
+ * Must not be called from the render thread. gl4es probes the driver from an ELF constructor, and
+ * that probe ends by calling `eglMakeCurrent(display, 0, 0, EGL_NO_CONTEXT)` on whichever thread
+ * triggered the load. Opened lazily from the render thread — as `glfwGetProcAddress` used to — it
+ * unbinds the context Minecraft has just made current, and the first framebuffer call then fails
+ * with no status at all rather than an error.
+ */
+void* loadTranslationLayer(const char* path);
+
+/** The translation layer opened by [loadTranslationLayer], or null when none was. */
+void* translationLayer();
+
 } // namespace lodestone::glfw

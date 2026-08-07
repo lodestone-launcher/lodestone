@@ -18,6 +18,8 @@ data class LaunchSpec(
     val javaHome: File,
     val gameDirectory: File,
     val nativesDirectory: File,
+    /** The desktop-GL translation layer to open, or null when the game talks to the driver. */
+    val translationLayer: File?,
     /** Directories appended to `LD_LIBRARY_PATH` before the VM starts. */
     val libraryPath: List<File>,
     val environment: Map<String, String>,
@@ -68,5 +70,25 @@ enum class Renderer(val id: String, val label: String) {
     ZINK("zink", "Zink (Vulkan)"),
 
     /** Hand the game's own Vulkan renderer straight to the device driver. */
-    VULKAN("vulkan", "Native Vulkan"),
+    VULKAN("vulkan", "Native Vulkan");
+
+    /**
+     * The translation layer libraries this renderer will accept, best first.
+     *
+     * [AUTO] lists both so that whichever is actually packaged wins, with Zink preferred: gl4es
+     * reports OpenGL 2.1 and cannot serve the 3.2 core profile 1.17 and later ask for.
+     */
+    val libraryNames: List<String>
+        get() = when (this) {
+            AUTO -> listOf(ZINK_LIBRARY, GL4ES_LIBRARY)
+            ZINK -> listOf(ZINK_LIBRARY)
+            GL4ES -> listOf(GL4ES_LIBRARY)
+            VULKAN -> emptyList()
+        }
+
+    private companion object {
+        /** Mesa builds Zink into a plain `libGL.so`, beside the `libgallium_dri.so` it loads. */
+        const val ZINK_LIBRARY = "libGL.so"
+        const val GL4ES_LIBRARY = "libgl4es.so"
+    }
 }
