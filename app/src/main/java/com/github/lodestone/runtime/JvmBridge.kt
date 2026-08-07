@@ -66,10 +66,41 @@ object JvmBridge {
         ensureLoaded()
         return nativeLaunch(
             libjvm.absolutePath,
-            jvmArgs.toTypedArray(),
+            toInitOptions(jvmArgs).toTypedArray(),
             mainClass,
             gameArgs.toTypedArray(),
         )
+    }
+
+    /**
+     * Rewrites `java`-launcher syntax into what `JNI_CreateJavaVM` accepts.
+     *
+     * The two are not the same language. Version manifests are written for the command line, where
+     * `-cp <path>` is two arguments; the VM's own option table has no `-cp` at all and takes the
+     * classpath as a single `-Djava.class.path=` property. Passing the manifest form through
+     * verbatim makes the VM reject it and refuse to start.
+     */
+    internal fun toInitOptions(jvmArgs: List<String>): List<String> {
+        val options = mutableListOf<String>()
+        var index = 0
+        while (index < jvmArgs.size) {
+            val argument = jvmArgs[index]
+            when {
+                (argument == "-cp" || argument == "-classpath") && index + 1 < jvmArgs.size -> {
+                    options += "-Djava.class.path=${jvmArgs[index + 1]}"
+                    index += 2
+                }
+
+                argument.startsWith("-cp=") ->
+                    options += "-Djava.class.path=${argument.removePrefix("-cp=")}".also { index++ }
+
+                else -> {
+                    options += argument
+                    index++
+                }
+            }
+        }
+        return options
     }
 
     /** Runs [body] on a thread sized for HotSpot's primordial thread. */
