@@ -143,6 +143,12 @@ class JavaRuntimeManager(private val files: GameFiles) {
     fun translationLayer(shimDirectory: File, renderer: Renderer): File? =
         renderer.libraryNames.map { File(shimDirectory, it) }.firstOrNull(File::isFile)
 
+    /** The EGL [translationLayer] has to be driven through, or null for Android's. */
+    fun eglLibrary(shimDirectory: File, renderer: Renderer, layer: File?): File? =
+        layer?.let { renderer.eglLibraryFor(it.name) }
+            ?.let { File(shimDirectory, it) }
+            ?.takeIf(File::isFile)
+
     private fun abiDirectory(): String =
         when (val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull()) {
             "arm64-v8a" -> "aarch64"

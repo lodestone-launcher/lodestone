@@ -40,6 +40,65 @@ using WindowFocusCallback = void (*)(GLFWwindow*, int);
 using WindowCloseCallback = void (*)(GLFWwindow*);
 using ErrorCallback = void (*)(int, const char*);
 
+// The EGL entry points the shim uses. Resolved by name rather than linked, because which library
+// serves them depends on the translation layer: gl4es runs on Android's EGL, Zink only on Mesa's.
+#define LODESTONE_EGL_FUNCTIONS(X)                                                                \
+    X(eglGetDisplay) X(eglInitialize) X(eglTerminate) X(eglChooseConfig) X(eglGetConfigAttrib)    \
+    X(eglCreateContext) X(eglDestroyContext) X(eglCreateWindowSurface)                            \
+    X(eglCreatePbufferSurface) X(eglDestroySurface) X(eglMakeCurrent) X(eglSwapBuffers)           \
+    X(eglSwapInterval) X(eglGetError) X(eglGetCurrentContext) X(eglGetProcAddress) X(eglBindAPI)
+
+struct EglApi {
+#define LODESTONE_DECLARE_EGL(name) decltype(&::name) name = nullptr;
+    LODESTONE_EGL_FUNCTIONS(LODESTONE_DECLARE_EGL)
+#undef LODESTONE_DECLARE_EGL
+};
+
+EglApi egl;
+
+bool loadEgl(const char* library) {
+    void* handle = dlopen(library, RTLD_NOW | RTLD_GLOBAL);
+    if (handle == nullptr) {
+        LOGE("EGL library %s did not load: %s", library, dlerror());
+        return false;
+    }
+
+    bool complete = true;
+#define LODESTONE_RESOLVE_EGL(name)                                                    \
+    egl.name = reinterpret_cast<decltype(&::name)>(dlsym(handle, #name));              \
+    if (egl.name == nullptr) {                                                         \
+        LOGE("%s exports no %s", library, #name);                                      \
+        complete = false;                                                              \
+    }
+    LODESTONE_EGL_FUNCTIONS(LODESTONE_RESOLVE_EGL)
+#undef LODESTONE_RESOLVE_EGL
+
+    if (complete) {
+        LOGI("EGL served by %s", library);
+    }
+    return complete;
+}
+
+/**
+ * `glGetString` from the translation layer, falling back to the one linked in.
+ *
+ * Asking the layer rather than the system GLES matters: it is the layer's answer that Minecraft
+ * will act on, and for Zink the linked GLES entry point belongs to a different driver entirely.
+ */
+const char* glString(GLenum name) {
+    using GetString = const GLubyte* (*)(GLenum);
+    static GetString getString = [] {
+        if (void* library = lodestone::glfw::translationLayer()) {
+            if (void* symbol = dlsym(library, "glGetString")) {
+                return reinterpret_cast<GetString>(symbol);
+            }
+        }
+        return static_cast<GetString>(&glGetString);
+    }();
+    const GLubyte* value = getString(name);
+    return value != nullptr ? reinterpret_cast<const char*>(value) : "unavailable";
+}
+
 double monotonicSeconds() {
     timespec now{};
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -67,8 +126,8 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
     }
 
     if (s.surface != EGL_NO_SURFACE) {
-        eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        eglDestroySurface(s.display, s.surface);
+        egl.eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        egl.eglDestroySurface(s.display, s.surface);
         s.surface = EGL_NO_SURFACE;
     }
     if (s.nativeWindow != nullptr) {
@@ -81,29 +140,29 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
         // GLFW keeps a context current until the caller changes it, and Minecraft leans on that: it
         // makes GL calls between frames, including while the activity is backgrounded and Android
         // has reclaimed the surface. The placeholder keeps those calls landing in a live context.
-        eglMakeCurrent(s.display, s.placeholder, s.placeholder, s.context);
+        egl.eglMakeCurrent(s.display, s.placeholder, s.placeholder, s.context);
         return false;
     }
 
     // EGL requires the window's buffer format to match the config's native visual, and the
     // compositor will otherwise refuse the surface with EGL_BAD_MATCH.
     EGLint visualId = 0;
-    eglGetConfigAttrib(s.display, s.config, EGL_NATIVE_VISUAL_ID, &visualId);
+    egl.eglGetConfigAttrib(s.display, s.config, EGL_NATIVE_VISUAL_ID, &visualId);
     ANativeWindow_setBuffersGeometry(window, 0, 0, visualId);
 
-    s.surface = eglCreateWindowSurface(s.display, s.config, window, nullptr);
+    s.surface = egl.eglCreateWindowSurface(s.display, s.config, window, nullptr);
     if (s.surface == EGL_NO_SURFACE) {
-        LOGE("eglCreateWindowSurface failed: 0x%04x", eglGetError());
+        LOGE("eglCreateWindowSurface failed: 0x%04x", egl.eglGetError());
         return false;
     }
-    if (eglMakeCurrent(s.display, s.surface, s.surface, s.context) != EGL_TRUE) {
-        LOGE("eglMakeCurrent failed: 0x%04x", eglGetError());
+    if (egl.eglMakeCurrent(s.display, s.surface, s.surface, s.context) != EGL_TRUE) {
+        LOGE("eglMakeCurrent failed: 0x%04x", egl.eglGetError());
         return false;
     }
-    eglSwapInterval(s.display, s.swapInterval.load());
+    egl.eglSwapInterval(s.display, s.swapInterval.load());
     // Logged once per bind rather than at init: it is the only place that can report what the
     // driver actually gave us, and a context that goes missing later shows up as its absence.
-    LOGI("EGL context current: %s / %s", glGetString(GL_VERSION), glGetString(GL_RENDERER));
+    LOGI("EGL context current: %s / %s", glString(GL_VERSION), glString(GL_RENDERER));
     return true;
 }
 
@@ -121,9 +180,20 @@ __attribute__((visibility("default"))) int glfwInit() {
         return GLFW_TRUE;
     }
 
-    s.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (s.display == EGL_NO_DISPLAY || eglInitialize(s.display, nullptr, nullptr) != EGL_TRUE) {
-        LOGE("eglInitialize failed: 0x%04x", eglGetError());
+    if (!loadEgl(lodestone::glfw::eglLibrary())) {
+        return GLFW_FALSE;
+    }
+    const bool desktopGl = lodestone::glfw::eglServesDesktopGl();
+
+    s.display = egl.eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (s.display == EGL_NO_DISPLAY || egl.eglInitialize(s.display, nullptr, nullptr) != EGL_TRUE) {
+        LOGE("eglInitialize failed: 0x%04x", egl.eglGetError());
+        return GLFW_FALSE;
+    }
+
+    // EGL defaults to the ES API, and a desktop context has to be asked for before it is created.
+    if (desktopGl && egl.eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) {
+        LOGE("eglBindAPI(EGL_OPENGL_API) failed: 0x%04x", egl.eglGetError());
         return GLFW_FALSE;
     }
 
@@ -131,7 +201,7 @@ __attribute__((visibility("default"))) int glfwInit() {
     // state through framebuffer objects rather than the default framebuffer.
     const EGLint attributes[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_RENDERABLE_TYPE, desktopGl ? EGL_OPENGL_BIT : EGL_OPENGL_ES3_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE, 8,
@@ -141,25 +211,34 @@ __attribute__((visibility("default"))) int glfwInit() {
         EGL_NONE,
     };
     EGLint configCount = 0;
-    if (eglChooseConfig(s.display, attributes, &s.config, 1, &configCount) != EGL_TRUE ||
+    if (egl.eglChooseConfig(s.display, attributes, &s.config, 1, &configCount) != EGL_TRUE ||
         configCount == 0) {
-        LOGE("no suitable EGL config: 0x%04x", eglGetError());
+        LOGE("no suitable EGL config: 0x%04x", egl.eglGetError());
         return GLFW_FALSE;
     }
 
-    const EGLint contextAttributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-    s.context = eglCreateContext(s.display, s.config, EGL_NO_CONTEXT, contextAttributes);
+    // 3.2 core is what Minecraft asks for from 1.17 onwards. Requesting exactly that rather than
+    // the highest the driver offers keeps the game on the profile its shaders are written against.
+    const EGLint desktopAttributes[] = {
+        EGL_CONTEXT_MAJOR_VERSION, 3,
+        EGL_CONTEXT_MINOR_VERSION, 2,
+        EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+        EGL_NONE,
+    };
+    const EGLint esAttributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+    const EGLint* contextAttributes = desktopGl ? desktopAttributes : esAttributes;
+    s.context = egl.eglCreateContext(s.display, s.config, EGL_NO_CONTEXT, contextAttributes);
     if (s.context == EGL_NO_CONTEXT) {
-        LOGE("eglCreateContext failed: 0x%04x", eglGetError());
+        LOGE("eglCreateContext failed: 0x%04x", egl.eglGetError());
         return GLFW_FALSE;
     }
 
     // One pixel, because nothing is ever meant to be read back from it: it exists so that a thread
     // between surfaces still has somewhere for its context to be current.
     const EGLint placeholderAttributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
-    s.placeholder = eglCreatePbufferSurface(s.display, s.config, placeholderAttributes);
+    s.placeholder = egl.eglCreatePbufferSurface(s.display, s.config, placeholderAttributes);
     if (s.placeholder == EGL_NO_SURFACE) {
-        LOGW("no placeholder surface: 0x%04x", eglGetError());
+        LOGW("no placeholder surface: 0x%04x", egl.eglGetError());
     }
 
     s.initialised.store(true);
@@ -172,20 +251,20 @@ __attribute__((visibility("default"))) void glfwTerminate() {
     if (!s.initialised.exchange(false)) {
         return;
     }
-    eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    egl.eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (s.surface != EGL_NO_SURFACE) {
-        eglDestroySurface(s.display, s.surface);
+        egl.eglDestroySurface(s.display, s.surface);
         s.surface = EGL_NO_SURFACE;
     }
     if (s.placeholder != EGL_NO_SURFACE) {
-        eglDestroySurface(s.display, s.placeholder);
+        egl.eglDestroySurface(s.display, s.placeholder);
         s.placeholder = EGL_NO_SURFACE;
     }
     if (s.context != EGL_NO_CONTEXT) {
-        eglDestroyContext(s.display, s.context);
+        egl.eglDestroyContext(s.display, s.context);
         s.context = EGL_NO_CONTEXT;
     }
-    eglTerminate(s.display);
+    egl.eglTerminate(s.display);
     s.display = EGL_NO_DISPLAY;
 }
 
@@ -346,7 +425,7 @@ __attribute__((visibility("default"))) void* glfwGetWindowUserPointer(GLFWwindow
 __attribute__((visibility("default"))) void glfwMakeContextCurrent(GLFWwindow* window) {
     auto& s = state();
     if (window == nullptr) {
-        eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        egl.eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         return;
     }
     // Binds lazily: the game makes its context current long before Android has a surface ready.
@@ -354,7 +433,7 @@ __attribute__((visibility("default"))) void glfwMakeContextCurrent(GLFWwindow* w
 }
 
 __attribute__((visibility("default"))) GLFWwindow* glfwGetCurrentContext() {
-    return eglGetCurrentContext() != EGL_NO_CONTEXT ? kWindowHandle : nullptr;
+    return egl.eglGetCurrentContext() != EGL_NO_CONTEXT ? kWindowHandle : nullptr;
 }
 
 __attribute__((visibility("default"))) void glfwSwapBuffers(GLFWwindow*) {
@@ -366,14 +445,14 @@ __attribute__((visibility("default"))) void glfwSwapBuffers(GLFWwindow*) {
         s.surfaceChanged.wait_for(lock, std::chrono::milliseconds(100));
         return;
     }
-    eglSwapBuffers(s.display, s.surface);
+    egl.eglSwapBuffers(s.display, s.surface);
 }
 
 __attribute__((visibility("default"))) void glfwSwapInterval(int interval) {
     auto& s = state();
     s.swapInterval.store(interval);
     if (s.display != EGL_NO_DISPLAY) {
-        eglSwapInterval(s.display, interval);
+        egl.eglSwapInterval(s.display, interval);
     }
 }
 
@@ -385,7 +464,7 @@ __attribute__((visibility("default"))) void* glfwGetProcAddress(const char* name
             return symbol;
         }
     }
-    return reinterpret_cast<void*>(eglGetProcAddress(name));
+    return reinterpret_cast<void*>(egl.eglGetProcAddress(name));
 }
 
 __attribute__((visibility("default"))) int glfwExtensionSupported(const char*) {

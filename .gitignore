@@ -26,4 +26,13 @@ app/src/main/jniLibs/*/libgl4es.so
 app/src/main/jniLibs/*/liblwjgl*.so
 app/src/main/jniLibs/*/libfreetype.so
 app/src/main/jniLibs/*/libopenal.so
+
+# Zink and the Mesa libraries it needs beside it, from runtime/build-zink.sh — 21 MB in
+# libgallium_dri.so alone. libEGL_zink.so is Mesa's EGL, renamed on the way in so that it cannot
+# shadow Android's.
+app/src/main/jniLibs/*/libGL.so
+app/src/main/jniLibs/*/libEGL_zink.so
+app/src/main/jniLibs/*/libgallium_dri.so
+app/src/main/jniLibs/*/libdrm.so
+app/src/main/jniLibs/*/libcutils.so
 /out/

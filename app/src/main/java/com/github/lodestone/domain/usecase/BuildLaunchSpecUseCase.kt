@@ -66,6 +66,7 @@ class BuildLaunchSpecUseCase(
 
         val javaHome = runtimes.runtimeRoot(feature)
         val translationLayer = runtimes.translationLayer(nativeLibraryDir, options.renderer)
+        val eglLibrary = runtimes.eglLibrary(nativeLibraryDir, options.renderer, translationLayer)
         val jvmArgs = buildList {
             // The `java` launcher derives java.home from its own location and hands it to the VM.
             // An embedder calling JNI_CreateJavaVM gets no such help, and without it HotSpot cannot
@@ -104,6 +105,7 @@ class BuildLaunchSpecUseCase(
                 gameDirectory = files.root,
                 nativesDirectory = nativesDirectory,
                 translationLayer = translationLayer,
+                eglLibrary = eglLibrary,
                 libraryPath = listOf(nativesDirectory, nativeLibraryDir),
                 environment = runtimes.environmentFor(feature, nativesDirectory),
             ),

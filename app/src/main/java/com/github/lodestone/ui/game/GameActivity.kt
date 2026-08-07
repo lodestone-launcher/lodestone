@@ -88,7 +88,8 @@ class GameActivity : ComponentActivity() {
         JvmBridge.startStdioPump { line -> Timber.tag("Minecraft").i(line) }
         request.environment.forEach { (key, value) -> JvmBridge.setEnv(key, value) }
         request.translationLayerPath?.let { path ->
-            Timber.i("Translation layer %s loaded: %b", path, GlfwBridge.loadTranslationLayer(path))
+            val loaded = GlfwBridge.loadTranslationLayer(path, request.eglLibraryPath)
+            Timber.i("Translation layer %s loaded: %b", path, loaded)
         }
 
         Timber.i("Launching %s via %s", request.versionId, request.libjvmPath)

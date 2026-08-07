@@ -48,9 +48,9 @@ object GlfwBridge {
      * game then dies building its first framebuffer. Opened here, LWJGL's own `dlopen` finds the
      * library already loaded and the constructor does not run again.
      */
-    fun loadTranslationLayer(path: String): Boolean {
+    fun loadTranslationLayer(path: String, eglLibrary: String?): Boolean {
         ensureLoaded()
-        return nativeLoadTranslationLayer(path)
+        return nativeLoadTranslationLayer(path, eglLibrary)
     }
 
     /**
@@ -135,7 +135,7 @@ object GlfwBridge {
     }
 
     @JvmStatic
-    private external fun nativeLoadTranslationLayer(path: String): Boolean
+    private external fun nativeLoadTranslationLayer(path: String, eglLibrary: String?): Boolean
 
     @JvmStatic
     private external fun nativeSetSurface(surface: Surface?, width: Int, height: Int)

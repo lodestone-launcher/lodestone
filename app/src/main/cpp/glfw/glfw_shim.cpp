@@ -5,6 +5,7 @@
 #include <jni.h>
 
 #include <cstdlib>
+#include <string>
 
 #include "common/log.h"
 
@@ -14,6 +15,8 @@ namespace {
 std::mutex g_layerMutex;
 void* g_layer = nullptr;
 bool g_layerOpened = false;
+std::string g_eglLibrary = "libEGL.so";
+bool g_desktopGl = false;
 
 } // namespace
 
@@ -22,21 +25,36 @@ WindowState& state() {
     return instance;
 }
 
-void* loadTranslationLayer(const char* path) {
+void* loadTranslationLayer(const char* path, const char* eglLibrary) {
     std::lock_guard<std::mutex> lock(g_layerMutex);
     if (g_layerOpened) {
         return g_layer;
     }
     g_layerOpened = true;
 
-    // gl4es reads these to find the drivers it forwards to. Setting them here rather than baking
-    // them in at build time keeps one binary working across vendors, and they have to be in the
-    // environment before the constructor runs.
-    setenv("LIBGL_GLES", "libGLESv2.so", 0);
-    setenv("LIBGL_EGL", "libEGL.so", 0);
-    // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and its
-    // shader conversion path is what matters.
-    setenv("LIBGL_NOBANNER", "1", 0);
+    if (eglLibrary != nullptr && *eglLibrary != '\0') {
+        g_eglLibrary = eglLibrary;
+        g_desktopGl = true;
+        // Mesa reads these while the driver comes up, so they have to be set before anything opens
+        // it. Zink is the only Gallium driver built, but the loader still probes for a hardware
+        // driver by name first and would find none.
+        setenv("GALLIUM_DRIVER", "zink", 0);
+        setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 0);
+        // Zink advertises whatever the Vulkan driver underneath can support, which it works out
+        // lazily; the overrides stop Mesa capping the profile below what Minecraft asks for.
+        setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 0);
+        setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 0);
+        setenv("GALLIUM_THREAD", "0", 0);
+    } else {
+        // gl4es reads these to find the drivers it forwards to. Setting them here rather than
+        // baking them in at build time keeps one binary working across vendors, and they have to be
+        // in the environment before the constructor runs.
+        setenv("LIBGL_GLES", "libGLESv2.so", 0);
+        setenv("LIBGL_EGL", "libEGL.so", 0);
+        // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
+        // its shader conversion path is what matters.
+        setenv("LIBGL_NOBANNER", "1", 0);
+    }
 
     // RTLD_GLOBAL so that LWJGL's own `dlsym(RTLD_DEFAULT, "glFoo")` lookups also land here.
     g_layer = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
@@ -51,6 +69,16 @@ void* loadTranslationLayer(const char* path) {
 void* translationLayer() {
     std::lock_guard<std::mutex> lock(g_layerMutex);
     return g_layer;
+}
+
+const char* eglLibrary() {
+    std::lock_guard<std::mutex> lock(g_layerMutex);
+    return g_eglLibrary.c_str();
+}
+
+bool eglServesDesktopGl() {
+    std::lock_guard<std::mutex> lock(g_layerMutex);
+    return g_desktopGl;
 }
 
 void postEvent(const Event& event) {
@@ -90,10 +118,17 @@ extern "C" {
 
 JNIEXPORT jboolean JNICALL
 Java_com_github_lodestone_runtime_GlfwBridge_nativeLoadTranslationLayer(
-        JNIEnv* env, jclass, jstring path) {
-    const char* chars = env->GetStringUTFChars(path, nullptr);
-    void* handle = lodestone::glfw::loadTranslationLayer(chars);
-    env->ReleaseStringUTFChars(path, chars);
+        JNIEnv* env, jclass, jstring path, jstring eglLibrary) {
+    const char* pathChars = env->GetStringUTFChars(path, nullptr);
+    const char* eglChars =
+            eglLibrary != nullptr ? env->GetStringUTFChars(eglLibrary, nullptr) : nullptr;
+
+    void* handle = lodestone::glfw::loadTranslationLayer(pathChars, eglChars);
+
+    if (eglChars != nullptr) {
+        env->ReleaseStringUTFChars(eglLibrary, eglChars);
+    }
+    env->ReleaseStringUTFChars(path, pathChars);
     return handle != nullptr ? JNI_TRUE : JNI_FALSE;
 }
 

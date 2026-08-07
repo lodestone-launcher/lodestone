@@ -20,6 +20,8 @@ data class LaunchSpec(
     val nativesDirectory: File,
     /** The desktop-GL translation layer to open, or null when the game talks to the driver. */
     val translationLayer: File?,
+    /** The EGL the layer is driven through, or null for Android's. */
+    val eglLibrary: File?,
     /** Directories appended to `LD_LIBRARY_PATH` before the VM starts. */
     val libraryPath: List<File>,
     val environment: Map<String, String>,
@@ -86,9 +88,28 @@ enum class Renderer(val id: String, val label: String) {
             VULKAN -> emptyList()
         }
 
+    /**
+     * The EGL implementation the layer named by [libraryNames] must be driven through.
+     *
+     * Zink's GL entry points only work on a context Mesa's own EGL created, so it cannot use
+     * Android's. gl4es forwards to the device's GLES driver and needs Android's EGL, which is what
+     * the shim uses when this is null.
+     */
+    fun eglLibraryFor(layerName: String): String? =
+        if (layerName == ZINK_LIBRARY) ZINK_EGL_LIBRARY else null
+
     private companion object {
         /** Mesa builds Zink into a plain `libGL.so`, beside the `libgallium_dri.so` it loads. */
         const val ZINK_LIBRARY = "libGL.so"
+
+        /**
+         * Mesa's EGL, staged under a name of its own.
+         *
+         * Its SONAME is still `libEGL.so`, and packaged under that name it would sit ahead of
+         * Android's on the app's library search path — so anything resolving the system EGL by
+         * `DT_NEEDED`, this shim included, would silently get Mesa's instead.
+         */
+        const val ZINK_EGL_LIBRARY = "libEGL_zink.so"
         const val GL4ES_LIBRARY = "libgl4es.so"
     }
 }

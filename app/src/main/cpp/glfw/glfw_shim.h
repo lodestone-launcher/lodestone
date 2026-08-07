@@ -143,9 +143,21 @@ void postEvent(const Event& event);
  * unbinds the context Minecraft has just made current, and the first framebuffer call then fails
  * with no status at all rather than an error.
  */
-void* loadTranslationLayer(const char* path);
+void* loadTranslationLayer(const char* path, const char* eglLibrary);
 
 /** The translation layer opened by [loadTranslationLayer], or null when none was. */
 void* translationLayer();
+
+/**
+ * The EGL implementation the shim drives, or `libEGL.so` when nothing else was selected.
+ *
+ * gl4es rewrites desktop GL onto the device's own GLES driver, so it wants Android's EGL and an ES
+ * context. Zink is a Mesa driver: its GL entry points only work on a context that Mesa's own EGL
+ * created, and that EGL is a different library. Neither can be chosen at link time.
+ */
+const char* eglLibrary();
+
+/** Whether [eglLibrary] serves desktop OpenGL rather than OpenGL ES. */
+bool eglServesDesktopGl();
 
 } // namespace lodestone::glfw

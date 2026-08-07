@@ -22,6 +22,8 @@ data class LaunchRequest(
     val gameDirectory: String,
     /** Opened by the game Activity before the VM starts; null when there is no layer to open. */
     val translationLayerPath: String? = null,
+    /** The EGL the layer is driven through; null for Android's. */
+    val eglLibraryPath: String? = null,
     val environment: Map<String, String>,
 ) {
     fun writeTo(file: File) {
@@ -38,6 +40,7 @@ data class LaunchRequest(
             libjvmPath = spec.libjvm.absolutePath,
             gameDirectory = spec.gameDirectory.absolutePath,
             translationLayerPath = spec.translationLayer?.absolutePath,
+            eglLibraryPath = spec.eglLibrary?.absolutePath,
             environment = spec.environment,
         )
 
