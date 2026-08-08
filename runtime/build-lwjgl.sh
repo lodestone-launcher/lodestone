@@ -108,6 +108,7 @@ TOOLCHAIN_FILE="${NDK}/build/cmake/android.toolchain.cmake"
 [[ -f "${TOOLCHAIN_FILE}" ]] || { echo "No CMake toolchain at ${TOOLCHAIN_FILE}" >&2; exit 2; }
 
 READELF="${TOOLCHAIN}/bin/llvm-readelf"
+STRIP="${TOOLCHAIN}/bin/llvm-strip"
 
 mkdir -p "${WORK}" "${OUTPUT}"
 
@@ -351,6 +352,14 @@ for abi in "${ABIS[@]}"; do
     # ----------------------------------------------------------------------------------------
     # Verification
     # ----------------------------------------------------------------------------------------
+    # The JNI sets are packaged as assets, which the Android plugin copies verbatim rather than
+    # stripping the way it does everything under `lib/`. Nothing here is reached except through the
+    # dynamic symbol table, which stripping leaves alone, so the rest is a quarter of the set's size
+    # spent on symbols no loader will ever read.
+    for lib in "${out}"/*.so; do
+        "${STRIP}" "${lib}"
+    done
+
     echo "==> Verifying ${abi}"
     for lib in liblwjgl liblwjgl_opengl liblwjgl_stb liblwjgl_tinyfd; do
         verify "${out}/${lib}.so" "${machine}" jni
