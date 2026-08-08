@@ -1,0 +1,24 @@
+diff --git a/src/hotspot/os/linux/os_linux.cpp b/src/hotspot/os/linux/os_linux.cpp
+index cddf9c65a..e69e0be50 100644
+--- a/src/hotspot/os/linux/os_linux.cpp
++++ b/src/hotspot/os/linux/os_linux.cpp
+@@ -1916,10 +1916,19 @@ const char* os::Linux::dll_path(void* lib) {
+   const char* l_path = NULL;
+   assert(lib != NULL, "dll_path parameter must not be NULL");
+ 
++#if defined(__BIONIC__)
++  // Android's linker exposes no way to map a handle back to a path: it has no dlinfo, and dladdr
++  // needs an address inside the library rather than the handle we are given. Reporting "unknown"
++  // is already a case this function supports — it is what the dlinfo failure path below returns —
++  // and callers treat a null path as simply not knowing.
++  (void)lib;
++  (void)lmap;
++#else
+   int res_dli = ::dlinfo(lib, RTLD_DI_LINKMAP, &lmap);
+   if (res_dli == 0) {
+     l_path = lmap->l_name;
+   }
++#endif
+   return l_path;
+ }
+ 
