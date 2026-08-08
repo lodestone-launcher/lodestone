@@ -4,10 +4,10 @@
     {
       "feature": 8,
       "abi": "arm64-v8a",
-      "url": "https://github.com/lodestone-launcher/jdk8u/releases/download/lodestone-jre8-v2/lodestone-jre8-arm64-v8a.tar.gz",
-      "size": 103991266,
-      "installedSize": 204893773,
-      "sha256": "38d0e56685cdf73424c2ed5220cbbc46abb42a7e7ac42159059561677830d9e0",
+      "url": "https://github.com/lodestone-launcher/jdk8u/releases/download/lodestone-jre8-v3/lodestone-jre8-arm64-v8a.tar.gz",
+      "size": 103992049,
+      "installedSize": 204893269,
+      "sha256": "cd0efe7a7fdd049840f560d59acbe259d06961168666a54007c0c56f515020a1",
       "javaVersion": "1.8.0_512"
     },
     {
