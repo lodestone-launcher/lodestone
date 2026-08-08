@@ -87,15 +87,15 @@ class JavaRuntimeManager(private val files: GameFiles) {
      * `JAVA_HOME` is read by the JDK's own bootstrap, and `LD_LIBRARY_PATH` lets the runtime's
      * libraries resolve each other — the natives directory comes first so that our GLFW shim and
      * translation layer win over anything of the same name inside the runtime.
+     *
+     * The library directories come from [libraryDirectories] rather than being spelled out, because
+     * 8 puts none of them where the modern releases do.
      */
     fun environmentFor(feature: Int, nativesDirectory: File): Map<String, String> {
         val root = runtimeRoot(feature)
-        val libraryPath = listOf(
-            nativesDirectory,
-            File(root, "lib"),
-            File(root, "lib/server"),
-            File(root, "lib/jli"),
-        ).filter(File::isDirectory).joinToString(":") { it.absolutePath }
+        val libraryPath = (listOf(nativesDirectory) + libraryDirectories(root))
+            .filter(File::isDirectory)
+            .joinToString(":") { it.absolutePath }
 
         return mapOf(
             "JAVA_HOME" to root.absolutePath,
@@ -148,6 +148,25 @@ class JavaRuntimeManager(private val files: GameFiles) {
         layer?.let { renderer.eglLibraryFor(it.name) }
             ?.let { File(shimDirectory, it) }
             ?.takeIf(File::isFile)
+
+    /**
+     * Every directory of the runtime's own shared libraries, across both layouts.
+     *
+     * The same split [libjvm] probes: modern releases keep them under `lib/`, 8 under
+     * `jre/lib/<arch>/`. Listing both rather than picking one keeps this from having to know which
+     * feature release it was handed, and the caller drops the paths that do not exist.
+     */
+    private fun libraryDirectories(root: File): List<File> {
+        val arch = abiDirectory()
+        return listOf(
+            "lib",
+            "lib/server",
+            "lib/jli",
+            "jre/lib/$arch",
+            "jre/lib/$arch/server",
+            "jre/lib/$arch/jli",
+        ).map { File(root, it) }
+    }
 
     private fun abiDirectory(): String =
         when (val abi = android.os.Build.SUPPORTED_ABIS?.firstOrNull()) {
