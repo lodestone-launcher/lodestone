@@ -35,10 +35,17 @@ part of the gap by handing `configure` the `*-unknown-linux-gnu` triplet while p
 at the NDK — so OpenJDK configures an ordinary 64-bit Linux build and then compiles it against
 bionic. These patches cover the rest.
 
-## Verified against jdk21u source and the NDK r28 sysroot
+## Verified against jdk17u, jdk21u and jdk25u source and the NDK r28 sysroot
 
-Everything below was checked against a real `openjdk/jdk21u` checkout and the bionic headers in
-NDK 28.2, not assumed.
+Everything below was checked against real `openjdk/jdk17u`, `openjdk/jdk21u` and `openjdk/jdk25u`
+checkouts and the bionic headers in NDK 28.2, not assumed.
+
+`jdk17/`, `jdk21/` and `jdk25/` carry the same six patches. None could be dropped as fixed
+upstream, because every one of them closes a gap on bionic's side rather than a bug on HotSpot's:
+newer JDK sources cannot help when the NDK still defines no `_CS_GNU_LIBC_VERSION`, declares no
+`dlinfo`, and ships no `prstatus_t`. The three copies are not shared, though — each is generated
+against its own checkout so it applies at its own line numbers instead of on `patch` fuzz, which
+matters most for `0003`, whose context reads `NULL` on 17 and `nullptr` on 21 and 25.
 
 ### Already portable — no patch needed
 
@@ -58,10 +65,28 @@ portable for musl and for the platforms that lack these APIs:
 
 ### Patches written
 
-- **`jdk21/0001-bionic-libc-version-detection.patch`** — bionic defines neither
-  `_CS_GNU_LIBC_VERSION` nor `_CS_GNU_LIBPTHREAD_VERSION`, so `os::Linux::libpthread_init` trips its
+- **`0001-bionic-libc-version-detection.patch`** — bionic defines neither `_CS_GNU_LIBC_VERSION`
+  nor `_CS_GNU_LIBPTHREAD_VERSION`, so `os::Linux::libpthread_init` trips its
   `#error "glibc too old (< 2.3.2)"` guard. Adds a `__BIONIC__` branch alongside the existing
-  `MUSL_LIBC` one. Verified to apply cleanly with `git apply --check`.
+  `MUSL_LIBC` one.
+- **`0002-bionic-elf-symbol-macros.patch`** — `<linux/elf.h>` already defines `ELF_ST_TYPE`, and
+  defines `ELF64_ST_TYPE` in terms of it. `elfFile.hpp` redefines `ELF_ST_TYPE` to `ELF64_ST_TYPE`,
+  which is then circular: the preprocessor will not expand a macro inside its own expansion, so a
+  bare identifier is left behind and the compile fails.
+- **`0003-bionic-no-dlinfo.patch`** — `os::Linux::dll_path` maps a `dlopen` handle back to a path
+  through `dlinfo`, which bionic does not declare. The function already has a "path unknown" answer
+  for the failing case, so that is what Android returns.
+- **`0004-bionic-netinet-in-include.patch`** — `SOCKETADDRESS` embeds `sockaddr_in` and
+  `sockaddr_in6` by value, and glibc's `<netdb.h>` happens to pull `<netinet/in.h>` in
+  transitively where bionic's does not, leaving both types incomplete.
+- **`0005-disable-serviceability-agent.patch`** — `libsaproc` reads core dumps through procfs
+  structures bionic has no equivalent for. It backs `jstack`, `jmap` and `jhsdb`, none of which
+  apply to a phone, so it is dropped rather than ported.
+- **`0006-bionic-runpath-not-rpath.patch`** — JDK-8326891 forces `DT_RPATH`, which Android's linker
+  ignores entirely, so every intra-JDK dependency becomes unresolvable. `DT_RUNPATH` is the only
+  tag bionic reads. Check this one on the artifact rather than the log: an earlier attempt shipped
+  a runpath reading `RIGIN`, because `$ORIGIN` had been eaten by shell escaping on the way through,
+  and only `readelf -d` showed it.
 
 ### Blockers found by actually running the build
 
@@ -74,38 +99,39 @@ These came out of real `configure` runs in the Docker image, in the order they a
 2. **Build compiler must match the target toolchain.** With `--with-toolchain-type=clang`, a gcc
    *build* compiler is rejected outright. Fixed by installing clang and pointing `BUILD_CC` /
    `BUILD_CXX` at it.
-3. **ALSA — still open.** `java.desktop` requires ALSA even under `--enable-headless-only`, and
-   installing `libasound2-dev` on the build host does *not* satisfy it: this is a cross build, so
-   `configure` looks inside the target sysroot given by `--with-sysroot`, where Android has no ALSA
-   at all and never will.
+3. **ALSA, cups, fontconfig and X11.** `java.desktop` requires all four even under
+   `--enable-headless-only`, and installing them on the build host does *not* satisfy it: this is a
+   cross build, so `configure` looks inside the target sysroot given by `--with-sysroot`, where
+   Android has none of them and never will. The `Dockerfile` stages their headers into the NDK
+   sysroot, plus target-built stub libraries for the two that are linked rather than dlopened.
+   `libjsound` therefore builds and keeps a `DT_NEEDED` on a `libasound.so` no device has, so it
+   fails to load at runtime — which costs nothing, because Minecraft drives all audio through
+   OpenAL and never touches `javax.sound`. `--enable-headless-only` does not stop the X11 check
+   either, and that check is autoconf's `AC_PATH_X`, which ignores `--with-sysroot` and does its
+   own search, so `build-jdk.sh` points it at the staged copies through `--x-includes` and
+   `--x-libraries`.
 
-   Three ways forward, in order of preference:
-
-   - Point `--with-alsa-include` at the host headers. They are architecture-independent, so this
-     gets past configure — but `libjsound` links `-lasound`, so expect the failure to move to the
-     link step, where there is no aarch64-android library to satisfy it.
-   - Stage the ALSA headers plus a stub `libasound.so` built for the target into the sysroot. Ugly,
-     but it keeps the module building and `libjsound` merely fails to dlopen at runtime.
-   - Drop the sound provider from `java.desktop` with a patch. The most honest option: Minecraft
-     drives all audio through OpenAL, so nothing the game does touches `javax.sound`.
-
-   The third is probably right, but it needs a patch written against the `java.desktop` makefiles
+   A tidier option, if `java.desktop` ever becomes troublesome for another reason, is to drop the
+   sound provider outright, but that needs a patch written against the `java.desktop` makefiles
    rather than a configure flag.
+
+### Settled by a real build
+
+- **`-lpthread`, `-lrt`, `-ldl`** — bionic folds all three into libc, so these link flags resolve
+  to nothing. An empty linker script per name satisfies `-l` without contributing a `DT_NEEDED`,
+  which is what the `Dockerfile` stages. Confirmed on the artifact: `readelf -d libjvm.so` names
+  only `libandroid`, `liblog`, `libm`, `libdl` and `libc`.
+- **Locale and charset** — bionic has no locale database, so `nl_langinfo` yields nothing useful,
+  but the initialisation path tolerates that rather than asserting. `Charset.defaultCharset()`
+  answers UTF-8 on a device with the launcher's environment.
 
 ### Still expected, to be confirmed by a real build
 
-These have not been reproduced yet — the first CI run is what turns them into concrete errors with
-line numbers, and some may prove to be non-issues like the ones above.
+These have not been reproduced yet, and some may prove to be non-issues like the ones above.
 
-- **`-lpthread`, `-lrt`, `-ldl`** — bionic folds all three into libc, so these link flags do not
-  resolve. `build-jdk.sh` compensates through its extra ldflags, but the makefiles name them in
-  several places and may need editing too.
 - **`jspawnhelper`** — `ProcessBuilder` execs a helper binary. It compiles, but Android's SELinux
   policy blocks executing files from app-writable storage on recent releases. Minecraft needs this
   only for its crash reporter, so making the failure non-fatal is preferable to making exec work.
-- **Locale and charset** — bionic has no locale database, so `nl_langinfo` yields nothing useful.
-  The launcher already pins `-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8`, but the initialisation
-  path must tolerate the missing locale rather than assert.
 - **Large pages** — must be forced off; Android does not expose `hugetlbfs`.
 - **CDS archive** — cannot be dumped at build time for a foreign architecture.
 
