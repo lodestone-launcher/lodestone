@@ -94,8 +94,8 @@ RUN set -eux; \
             > "${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}/lib${lib}.so"; \
     done
 
-COPY build-jdk.sh /usr/local/bin/build-jdk.sh
-RUN chmod +x /usr/local/bin/build-jdk.sh
+COPY build-jdk.sh audit-image.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/build-jdk.sh /usr/local/bin/audit-image.sh
 
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/build-jdk.sh"]

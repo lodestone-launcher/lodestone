@@ -180,14 +180,10 @@ CONFIGURE_ARGS=(
     "--with-jvm-variants=${JVM_VARIANT}"
     "--with-debug-level=release"
     "--with-native-debug-symbols=none"
-    "--enable-headless-only"
-    "--disable-warnings-as-errors"
     "--disable-precompiled-headers"
     "--with-extra-cflags=${EXTRA_CFLAGS[*]}"
     "--with-extra-cxxflags=${EXTRA_CFLAGS[*]}"
     "--with-extra-ldflags=${EXTRA_LDFLAGS[*]}"
-    # Android has no DTrace and no CDS archive to dump at build time on a foreign architecture.
-    "--with-jvm-features=-dtrace"
     # freetype is the one java.desktop dependency OpenJDK links rather than dlopens, so staging
     # headers cannot satisfy it and there is no aarch64-android library to link against. OpenJDK
     # carries its own freetype source for exactly this case; building it for the target sidesteps
@@ -198,10 +194,7 @@ CONFIGURE_ARGS=(
     "--x-includes=${SYSROOT}/usr/include"
     "--x-libraries=${SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API}"
     "--with-freetype=bundled"
-    # Same reasoning: both are vendored, and the system copies in the image are x86_64.
-    "--with-libjpeg=bundled"
     "--with-giflib=bundled"
-    "--with-libpng=bundled"
     "--with-zlib=bundled"
     # configure prints "Ignoring value of CC from the environment. Use command line variables
     # instead" and then picks up the host gcc, so every tool has to be passed as an assignment.
@@ -218,7 +211,22 @@ CONFIGURE_ARGS=(
     "BUILD_CXX=${BUILD_CXX}"
 )
 
-if [[ "${FEATURE}" != "8" ]]; then
+if [[ "${FEATURE}" == "8" ]]; then
+    # 8 predates every one of these. Headless is `--disable-headful` (which the 0010 patch teaches
+    # the build to honour); there is no `--disable-warnings-as-errors`, so the 0008 patch turns off
+    # the one place that promotes them; there is no `--with-jvm-features`, and 8's HotSpot builds
+    # no DTrace on linux-aarch64 to begin with; and libjpeg and libpng are always vendored, with no
+    # switch to say so. Passing them anyway is not harmless: configure answers "unrecognized
+    # options" and stops before writing spec.gmk, while still exiting 0.
+    CONFIGURE_ARGS+=("--disable-headful")
+else
+    CONFIGURE_ARGS+=("--enable-headless-only")
+    CONFIGURE_ARGS+=("--disable-warnings-as-errors")
+    # Android has no DTrace and no CDS archive to dump at build time on a foreign architecture.
+    CONFIGURE_ARGS+=("--with-jvm-features=-dtrace")
+    # Vendored for the same reason as freetype: the system copies in the image are x86_64.
+    CONFIGURE_ARGS+=("--with-libjpeg=bundled")
+    CONFIGURE_ARGS+=("--with-libpng=bundled")
     # `--with-build-jdk` lets the cross build run jlink and friends natively instead of trying to
     # execute freshly built Android binaries on the build host.
     CONFIGURE_ARGS+=("--with-build-jdk=${BOOT_JDK}")
@@ -229,8 +237,16 @@ echo "==> Configuring OpenJDK ${FEATURE} for ${ABI}"
 mkdir -p "${BUILD_DIR}"
 (
     cd "${SRC}"
-    bash configure --with-conf-name="android-${ABI}" "${CONFIGURE_ARGS[@]}"
+    bash configure --with-conf-name="android-${ABI}" "${CONFIGURE_ARGS[@]}" 2>&1 | tee "${BUILD_DIR}/lodestone-configure.log"
 )
+# configure exits 0 after refusing an option it does not know, so its status says nothing. The
+# published Java 8 runtime was built from a spec.gmk left behind by an earlier, different configure
+# for exactly this reason, and the committed arguments could no longer reproduce it.
+if grep -q '^configure: error:' "${BUILD_DIR}/lodestone-configure.log"; then
+    echo "configure reported an error above and did not complete" >&2
+    exit 1
+fi
+[[ -f "${BUILD_DIR}/spec.gmk" ]] || { echo "configure produced no ${BUILD_DIR}/spec.gmk" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------------------------
 # Build and package
@@ -241,6 +257,12 @@ make -C "${SRC}" CONF_NAME="android-${ABI}" JOBS="${JOBS}" images
 IMAGE_DIR="${BUILD_DIR}/images/jdk"
 [[ -d "${IMAGE_DIR}" ]] || IMAGE_DIR="${BUILD_DIR}/images/j2sdk-image"
 [[ -d "${IMAGE_DIR}" ]] || { echo "No image produced under ${BUILD_DIR}/images" >&2; exit 1; }
+
+# Deliberately before packaging, so a runtime that cannot load produces no tarball to publish. A
+# shared library is allowed to leave symbols undefined and the linker says nothing about the ones
+# no library will ever define, which is how a libjvm.so missing a template instantiation shipped
+# and failed at `dlopen` on every device.
+"$(dirname "$0")/audit-image.sh" --image "${IMAGE_DIR}" --abi "${ABI}" --api "${ANDROID_API}"
 
 mkdir -p "${OUTPUT}"
 ARCHIVE="${OUTPUT}/lodestone-jre${FEATURE}-${ABI}.tar.gz"
