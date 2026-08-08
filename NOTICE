@@ -1,0 +1,79 @@
+Lodestone bundles and distributes the following third-party components. Each is
+listed with its licence, the upstream project it comes from, and — where we had
+to modify it to run on Android — the fork carrying those changes.
+
+Every fork below sits on the exact upstream commit its released binary was built
+from, with our patches as individual commits on the `lodestone/android-arm64`
+branch, so the published source corresponds to the published binary.
+
+--------------------------------------------------------------------------------
+OpenJDK  (java 8, 17, 21, 25)
+    GPL-2.0 WITH Classpath-exception-2.0
+    https://github.com/openjdk/jdk8u   -> https://github.com/lodestone-launcher/jdk8u
+    https://github.com/openjdk/jdk17u  -> https://github.com/lodestone-launcher/jdk17u
+    https://github.com/openjdk/jdk21u  -> https://github.com/lodestone-launcher/jdk21u
+    https://github.com/openjdk/jdk25u  -> https://github.com/lodestone-launcher/jdk25u
+
+    Modified. The Classpath exception is what allows Lodestone's own code to
+    remain separately licensed while linking against the runtime; the runtime
+    itself stays GPL, and its corresponding source is the tagged branch above.
+
+Mesa  (Zink, Turnip, libdrm)
+    MIT
+    https://gitlab.freedesktop.org/mesa/mesa
+    -> https://github.com/lodestone-launcher/mesa
+
+    Modified. That fork is a single-branch import of the mesa-26.1.6 tree rather
+    than full history, because the upstream clone could not complete; GitLab
+    remains canonical. The imported root tree hash matches upstream's for that
+    tag and can be checked independently.
+
+OpenAL Soft
+    LGPL-2.1-or-later
+    https://github.com/kcat/openal-soft, tag 1.23.1, commit d3875f333
+
+    Unmodified. Cross-compiled for Android from that exact commit with no source
+    changes, so upstream is the corresponding source. It ships as a separate
+    shared library and is loaded dynamically, so it may be replaced with another
+    build of the same version.
+
+gl4es
+    MIT
+    https://github.com/ptitSeb/gl4es
+
+    Unmodified. Built from the upstream default branch; see runtime/build-gl4es.sh.
+
+LWJGL 3.3.3  (and its vendored stb and tinyfiledialogs)
+    BSD-3-Clause
+    https://github.com/LWJGL/lwjgl3
+
+    Unmodified. Cross-compiled for Android; see runtime/build-lwjgl.sh.
+
+FreeType
+    FTL  (dual-licensed FTL / GPL-2.0; Lodestone takes the FTL)
+    https://gitlab.freedesktop.org/freetype/freetype
+
+    Unmodified. Portions of this software are copyright (c) The FreeType Project
+    (www.freetype.org). All rights reserved.
+
+libffi
+    MIT
+    https://github.com/libffi/libffi
+
+    Unmodified. Linked into LWJGL's core native library.
+
+LLVM libc++  (libc++_shared.so)
+    Apache-2.0 WITH LLVM-exception
+    https://llvm.org
+
+    Unmodified, as shipped in the Android NDK.
+
+--------------------------------------------------------------------------------
+Not third-party: app/src/main/cpp/mesa/hardware_stub.cpp is Lodestone's own
+stand-in for Android's libhardware, which an unprivileged app cannot load. It is
+not part of Mesa.
+
+Minecraft is a trademark of Mojang Studios. Lodestone is an unofficial launcher,
+not affiliated with or endorsed by Mojang Studios or Microsoft. It ships no
+Minecraft game content; the game is downloaded from Mojang's own servers and
+requires an account that owns it.
