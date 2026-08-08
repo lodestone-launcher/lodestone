@@ -1,12 +1,17 @@
 package com.github.lodestone.domain.usecase
 
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.data.local.files.LwjglNativesInstaller
+import com.github.lodestone.data.local.files.LwjglNativesSource
 import com.github.lodestone.domain.model.account.MinecraftAccount
 import com.github.lodestone.domain.model.launch.LaunchOptions
 import com.github.lodestone.domain.model.launch.LaunchSpec
 import com.github.lodestone.domain.model.version.LaunchEnvironment
+import com.github.lodestone.domain.model.version.LwjglSelection
 import com.github.lodestone.domain.model.version.ResolvedVersion
+import com.github.lodestone.domain.model.version.lwjglSelection
 import com.github.lodestone.runtime.JavaRuntimeManager
+import timber.log.Timber
 import java.io.File
 
 /**
@@ -19,6 +24,7 @@ import java.io.File
 class BuildLaunchSpecUseCase(
     private val files: GameFiles,
     private val runtimes: JavaRuntimeManager,
+    private val lwjglNatives: LwjglNativesSource,
     private val argumentBuilder: LaunchArgumentBuilder = LaunchArgumentBuilder(),
 ) {
 
@@ -27,6 +33,13 @@ class BuildLaunchSpecUseCase(
 
         /** The version needs a Java runtime that is not installed yet. */
         data class MissingRuntime(val feature: Int, val component: String) : Result
+
+        /**
+         * The version pins LWJGL 2. Reported rather than launched: pre-1.13 needs a natives layout
+         * Lodestone does not build yet, and starting it on an LWJGL 3 set would fail somewhere far
+         * from the cause.
+         */
+        data class UnsupportedLwjgl(val version: String) : Result
     }
 
     operator fun invoke(
@@ -40,13 +53,32 @@ class BuildLaunchSpecUseCase(
         val libjvm = runtimes.libjvm(feature)
             ?: return Result.MissingRuntime(feature, version.javaVersion.component)
 
+        val selection = version.lwjglSelection(environment)
+        if (selection is LwjglSelection.Unsupported) {
+            return Result.UnsupportedLwjgl(selection.requested)
+        }
+
+        // Per version, and the same directory `org.lwjgl.librarypath` names: LWJGL's Java side and
+        // its JNI libraries only ever bind to their own release, so the set that lands here is the
+        // one this version's manifest pins rather than a global one.
         val nativesDirectory = files.nativesDirectory(version.id)
         nativesDirectory.mkdirs()
-
-        // Mojang's manifests carry Linux natives for x86-64 only, so the ones the version installer
-        // unpacked cannot be loaded here at all. The cross-built replacements ride in the APK and
-        // have to sit beside them, because `org.lwjgl.librarypath` names a single directory.
-        overrideExtractedNatives(nativeLibraryDir, nativesDirectory)
+        if (selection is LwjglSelection.Packaged) {
+            if (!selection.isExact) {
+                Timber.w(
+                    "%s pins LWJGL %s; installing the packaged %s set instead",
+                    version.id,
+                    selection.requested,
+                    selection.set.version,
+                )
+            }
+            LwjglNativesInstaller.install(
+                set = selection.set,
+                source = lwjglNatives,
+                nativeLibraryDir = nativeLibraryDir,
+                target = nativesDirectory,
+            )
+        }
 
         val classpath = buildList {
             version.classpathLibraries(environment).forEach { add(files.library(it.path)) }
@@ -110,44 +142,5 @@ class BuildLaunchSpecUseCase(
                 environment = runtimes.environmentFor(feature, nativesDirectory),
             ),
         )
-    }
-
-    /**
-     * Replaces the version's unpacked LWJGL natives with the cross-built ones from the APK.
-     *
-     * Copied rather than linked: `nativeLibraryDir` and app storage are frequently different
-     * filesystems, so a hard link cannot be relied on. A failure here is deliberately not fatal —
-     * the launch proceeds and reports a missing library, which is easier to diagnose.
-     *
-     * The shims themselves are pointedly *not* copied here. `liblodestone_glfw.so` is already loaded
-     * by the Activity to receive the surface, and the linker keys a mapping on its path: a second
-     * copy under a second path would be a second library, with its own window state, so the surface
-     * would arrive at one and EGL would run in the other.
-     */
-    private fun overrideExtractedNatives(from: File, to: File) {
-        // `libfreetype.so` and `libopenal.so` carry no `lwjgl_` prefix because LWJGL's freetype and
-        // openal bindings dispatch through libffi rather than through a JNI stub of their own, so
-        // the natives jar ships the third-party library itself.
-        val natives = listOf(
-            "liblwjgl.so",
-            "liblwjgl_opengl.so",
-            "liblwjgl_stb.so",
-            "liblwjgl_tinyfd.so",
-            "libfreetype.so",
-            "libopenal.so",
-        )
-        for (name in natives) {
-            val source = File(from, name)
-            if (!source.isFile) {
-                continue
-            }
-            val destination = File(to, name)
-            if (destination.isFile && destination.length() == source.length()) {
-                continue
-            }
-            destination.delete()
-            runCatching { source.copyTo(destination, overwrite = true) }
-                .onSuccess { destination.setExecutable(true, false) }
-        }
     }
 }

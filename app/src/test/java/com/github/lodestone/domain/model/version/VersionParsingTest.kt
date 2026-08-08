@@ -171,6 +171,61 @@ class VersionParsingTest {
     }
 
     @Test
+    fun `the lwjgl set follows the coordinate the manifest pins`() = runTest {
+        // 26.2 has no plain `org.lwjgl:lwjgl:3.4.1` entry at all; the version has to come off the
+        // classified ones, which is where the missing ffi_get_closure_size was traced back to.
+        val modern = resolve("26.2").lwjglSelection(android)
+        assertEquals(LwjglSelection.Packaged("3.4.1", LwjglNativeSet.V3_4_1), modern)
+        assertTrue((modern as LwjglSelection.Packaged).isExact)
+
+        val current = resolve("1.21.4").lwjglSelection(android)
+        assertEquals(LwjglSelection.Packaged("3.3.3", LwjglNativeSet.V3_3_3), current)
+        assertTrue((current as LwjglSelection.Packaged).isExact)
+    }
+
+    @Test
+    fun `lwjgl 2 versions are reported rather than served a 3 x set`() = runTest {
+        assertEquals(
+            LwjglSelection.Unsupported("2.9.1"),
+            resolve("1.7.10").lwjglSelection(android),
+        )
+    }
+
+    @Test
+    fun `a manifest naming no lwjgl selects nothing`() = runBlocking {
+        val headless = VersionJson(
+            id = "headless",
+            mainClass = "net.minecraft.client.main.Main",
+            libraries = listOf(Library(name = "com.google.code.gson:gson:2.10.1")),
+        )
+        val resolved = VersionResolver.resolve(headless.id) { headless }
+        assertEquals(LwjglSelection.Absent, resolved.lwjglSelection(android))
+    }
+
+    @Test
+    fun `an unknown lwjgl release clamps to the nearest packaged set`() = runBlocking {
+        // Shaped like a mod loader that pins its own LWJGL: the override is most-derived, so it wins
+        // over the 3.3.3 the vanilla parent lists.
+        val future = VersionJson(
+            id = "future",
+            inheritsFrom = "1.21.4",
+            libraries = listOf(Library(name = "org.lwjgl:lwjgl:3.5.0")),
+        )
+        val resolved = VersionResolver.resolve(future.id) { id ->
+            if (id == future.id) future else fixture(id)
+        }
+        val selection = resolved.lwjglSelection(android)
+        // Newest rather than oldest: nothing older can have grown towards a release we have not seen.
+        assertEquals(LwjglSelection.Packaged("3.5.0", LwjglNativeSet.V3_4_1), selection)
+        assertFalse((selection as LwjglSelection.Packaged).isExact)
+
+        // And a release older than everything packaged clamps the other way.
+        val old = resolve("1.16.5").lwjglSelection(android)
+        assertEquals(LwjglSelection.Packaged("3.2.2", LwjglNativeSet.V3_3_3), old)
+        assertFalse((old as LwjglSelection.Packaged).isExact)
+    }
+
+    @Test
     fun `inheritance cycles are rejected rather than hanging`() {
         val a = VersionJson(id = "a", inheritsFrom = "b", mainClass = "M")
         val b = VersionJson(id = "b", inheritsFrom = "a", mainClass = "M")

@@ -210,6 +210,15 @@ class HomeViewModel(
                 }
             }
 
+            is BuildLaunchSpecUseCase.Result.UnsupportedLwjgl -> {
+                _uiState.update {
+                    it.copy(
+                        message = "${entry.id} needs LWJGL ${result.version}, " +
+                            "which Lodestone does not support yet",
+                    )
+                }
+            }
+
             is BuildLaunchSpecUseCase.Result.Ready -> {
                 LaunchRequest.from(result.spec)
                     .writeTo(File(context.filesDir, GameActivity.LAUNCH_REQUEST_FILE))
