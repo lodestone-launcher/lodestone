@@ -83,8 +83,6 @@ class LaunchArgumentBuilder(
         //   E/libsigchain: reverting to SIG_DFL handler for signal 11
         // Forking gives the child its own copy, so a failed exec stays the child's problem.
         arguments += "-Djdk.lang.Process.launchMechanism=FORK"
-        // LWJGL unpacks its own bundled natives unless told where ours already are.
-        arguments += "-Dorg.lwjgl.librarypath=${paths.nativesDirectory.absolutePath}"
 
         arguments += options.extraJvmArgs
         return arguments
