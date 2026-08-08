@@ -96,9 +96,9 @@ class VersionInstaller(
      * Fetches the Java runtime the version asks for.
      *
      * Last, because it is by far the largest download and everything before it is useless without
-     * the game files anyway. A runtime that is not published — Java 8 is still being cross-built —
-     * leaves an install that is complete apart from being unable to launch, which is worth saying
-     * out loud rather than throwing away.
+     * the game files anyway. A runtime that is not published for this device leaves an install that
+     * is complete apart from being unable to launch, which is worth saying out loud rather than
+     * throwing away.
      */
     private suspend fun installRuntime(version: ResolvedVersion, onStage: (InstallStage) -> Unit) {
         val feature = runtimeInstaller.featureFor(version.javaVersion)

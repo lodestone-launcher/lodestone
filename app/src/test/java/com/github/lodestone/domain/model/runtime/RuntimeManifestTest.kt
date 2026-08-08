@@ -59,8 +59,8 @@ class RuntimeManifestTest {
 
     @Test
     fun `an unpublished runtime is absent rather than empty`() {
-        // Java 8 is still being cross-built. Whichever way that goes, asking for a feature nobody
-        // publishes has to be answerable without a crash.
+        // Only the releases Minecraft asks for are built, so asking for a feature nobody publishes
+        // has to be answerable without a crash.
         assertNull(bundled.find(feature = 6, abi = "arm64-v8a"))
     }
 }
