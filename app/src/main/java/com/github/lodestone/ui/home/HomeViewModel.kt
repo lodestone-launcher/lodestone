@@ -71,6 +71,9 @@ class HomeViewModel(
 
     private var installJob: Job? = null
 
+    /** Why the install could not fetch its runtime, kept until the install reports its result. */
+    private var runtimeWarning: String? = null
+
     init {
         refresh()
     }
@@ -102,6 +105,7 @@ class HomeViewModel(
             return
         }
         installJob = viewModelScope.launch {
+            runtimeWarning = null
             _uiState.update { it.copy(installing = entry.id, progress = 0f, message = null) }
             runCatching {
                 installer.install(entry, launchEnvironment()) { stage -> onStage(stage) }
@@ -112,7 +116,9 @@ class HomeViewModel(
                             installing = null,
                             progressLabel = null,
                             progress = 1f,
-                            message = "Installed ${version.id} — needs Java ${version.javaVersion.majorVersion}",
+                            // An install that could not get its runtime still succeeded, but saying
+                            // so without saying why would send someone to a Play button that fails.
+                            message = runtimeWarning ?: "Installed ${version.id}",
                         )
                     }
                 }
@@ -243,10 +249,12 @@ class HomeViewModel(
                 )
 
             is InstallStage.InstallingRuntime -> onRuntimeStage(stage.stage)
-            // Kept on screen after the install finishes, unlike a progress label, because it is the
-            // reason Play will not work.
-            is InstallStage.RuntimeUnavailable ->
-                _uiState.update { it.copy(progressLabel = null, message = stage.reason) }
+            // Held rather than shown, because the install goes on to report its own result and
+            // would otherwise overwrite the one thing worth reading.
+            is InstallStage.RuntimeUnavailable -> {
+                runtimeWarning = stage.reason
+                report(null)
+            }
 
             is InstallStage.Done -> report(null)
         }
