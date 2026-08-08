@@ -1,0 +1,103 @@
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 87b4190..12a5af7 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -939,6 +939,65 @@ a730_raw_magic_regs = [
+         [A6XXRegs.REG_A6XX_UCHE_UNKNOWN_0E12, 0x3200000],
+     ]
+ 
++# Adreno 720, as found in the SM7550 (Snapdragon 7 Gen 3). Upstream has no entry for it, so
++# eglInitialize on Turnip fails outright with "device (chip_id = 43020000, gpu_id = 6720) is
++# unsupported" and every Zink-based renderer is unreachable on the phone.
++#
++# These were decoded from Adreno 720 blob command streams rather than copied from a730: the a7xx
++# gen1 parts differ from one another in exactly these registers, and a730's values are wrong here.
++a720_magic_regs = dict(
++        RB_DBG_ECO_CNTL = 0x00000000,
++        RB_DBG_ECO_CNTL_blit = 0x00000000,
++        RB_RBP_CNTL = 0x0,
++)
++
++a720_raw_magic_regs = [
++        [A6XXRegs.REG_A6XX_UCHE_CACHE_WAYS, 0x00040004],
++        [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL, 0x03000000],
++        [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL1, 0x00000700],
++
++        [A6XXRegs.REG_A6XX_SP_CHICKEN_BITS, 0x00001400],
++        [A6XXRegs.REG_A7XX_SP_CHICKEN_BITS_1, 0x01400400],
++        [A6XXRegs.REG_A7XX_SP_CHICKEN_BITS_2, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_CHICKEN_BITS_3, 0x00000000],
++
++        [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E10, 0x00000000],
++        [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00000000],
++        [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x11000000],
++
++        [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x00001f1f],
++        [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x20100000],
++        [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x01fc7f00],
++
++        [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
++        [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_HLSQ_MODE_CNTL, 0x00000000],
++
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000001],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_B310, 0x00000000],
++
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE2,   0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE2+1, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE4,   0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE4+1, 0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE6,   0x00000000],
++        [A6XXRegs.REG_A7XX_SP_UNKNOWN_0CE6+1, 0x00000000],
++
++        [A6XXRegs.REG_A7XX_GRAS_ROTATION_CNTL, 0x00000000],
++        [A6XXRegs.REG_A6XX_GRAS_DBG_ECO_CNTL,  0x00000800],
++
++        [A6XXRegs.REG_A7XX_RB_UNKNOWN_8E79, 0x00000000],
++        [A6XXRegs.REG_A7XX_RB_LRZ_CNTL2, 0x00000000],
++        [A6XXRegs.REG_A7XX_RB_CCU_DBG_ECO_CNTL, 0x00000000],
++        [A6XXRegs.REG_A6XX_VPC_DBG_ECO_CNTL, 0x02000000],
++        [A6XXRegs.REG_A6XX_UCHE_UNKNOWN_0E12, 0x03200000],
++]
++
+ a740_magic_regs = dict(
+         RB_DBG_ECO_CNTL = 0x00000000,
+         RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
+@@ -1032,6 +1091,32 @@ add_gpus([
+         raw_magic_regs = a730_raw_magic_regs,
+     ))
+ 
++add_gpus([
++        GPUId(chip_id=0x43020000, name="FD720"),
++        GPUId(chip_id=0xffff43020000, name="FD720"), # Default no-speedbin fallback
++    ], A6xxGPUInfo(
++        CHIP.A7XX,
++        [a7xx_base, a7xx_gen1],
++        # Everything but num_ccu and the magic registers matches a730: the a7xx gen1 parts share a
++        # tiling and fiber layout, and only the shader core count and the per-GPU register tuning
++        # actually differ. num_ccu is the one value here with no second source — a730 and a725 have
++        # 4, a735 has 3, and 2 is what the blob traces imply for this smaller part. GMEM size is not
++        # guessed at all; KGSL reports it.
++        num_ccu = 2,
++        tile_align_w = 64,
++        tile_align_h = 32,
++        tile_max_w = 1024,
++        tile_max_h = 1024,
++        num_vsc_pipes = 32,
++        # Confirmed against the phone: the vendor driver reports maxComputeSharedMemorySize 32768.
++        cs_shared_mem_size = 32 * 1024,
++        wave_granularity = 2,
++        fibers_per_sp = 128 * 2 * 16,
++        highest_bank_bit = 16,
++        magic_regs = a720_magic_regs,
++        raw_magic_regs = a720_raw_magic_regs,
++    ))
++
+ add_gpus([
+         GPUId(chip_id=0xffff43030c00, name="Adreno X1-45"),
+         GPUId(chip_id=0x43030B00, name="FD735")
