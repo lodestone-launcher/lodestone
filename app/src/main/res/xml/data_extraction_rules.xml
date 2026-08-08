@@ -1,19 +1,17 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
--->
+<?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- The account store is encrypted with a key that never leaves this device's key store, so
+             a copy restored anywhere else is undecryptable noise. Backing it up would only spread a
+             credential around without ever being usable. -->
+        <exclude domain="file" path="accounts.bin" />
+        <!-- Versions, assets and Java runtimes are hundreds of megabytes that can be fetched
+             again. -->
+        <exclude domain="file" path="minecraft" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <!-- Same reasoning: the key store entry does not transfer, so neither can the tokens. -->
+        <exclude domain="file" path="accounts.bin" />
+        <exclude domain="file" path="minecraft" />
     </device-transfer>
-    -->
 </data-extraction-rules>
