@@ -12,6 +12,11 @@ so their order is stable (`0001-…`, `0002-…`).
   `dlopen`s whatever `org.lwjgl.opengl.libname` names and resolves each function with `dlsym`, so
   it needs a library that actually exports the symbols. The patch links Mesa's own
   `libglapi_bridge` — the same object GLX uses — into a `libGL.so` when the platform is Android.
+- **`mesa/0002-allow-the-desktop-gl-api-to-be-bound-on-android.patch`** — `_eglIsApiValid` refuses
+  `EGL_OPENGL_API` on Android, so `eglBindAPI(EGL_OPENGL_API)` answers `EGL_BAD_PARAMETER` and a
+  context can only ever be an ES one. Zink's entire purpose here is a desktop GL context, so the
+  Android exclusion is dropped. Verified on the artifact rather than the build log: `eglBindAPI` in
+  the resulting `libEGL_zink.so` compiles to `(api & ~2) == 0x30a0`, which admits `0x30a2`.
 
 # OpenJDK
 

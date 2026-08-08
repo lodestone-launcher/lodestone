@@ -94,12 +94,22 @@ SOURCE="${WORK}/mesa"
 if [[ ! -d "${SOURCE}" ]]; then
     echo "==> Cloning Mesa ${TAG}"
     git clone --depth 1 --branch "${TAG}" "${REPOSITORY}" "${SOURCE}"
-    for patch in "${PATCHES}"/*.patch; do
-        [[ -f "${patch}" ]] || continue
-        echo "    applying $(basename "${patch}")"
-        git -C "${SOURCE}" apply "${patch}"
-    done
 fi
+
+# The work directory survives between runs, so the tree has to be reset before patching. Otherwise
+# an edited patch would be skipped as "previously applied" and the build would quietly ship the
+# previous version. `git clean` is deliberately without -x: meson's downloaded wrap subprojects are
+# gitignored, cost minutes to re-fetch, and are not what patches touch.
+echo "==> Resetting ${SOURCE} to a pristine checkout"
+git -C "${SOURCE}" checkout -- .
+git -C "${SOURCE}" clean -fd >/dev/null
+
+echo "==> Applying patches from ${PATCHES}"
+for patch in "${PATCHES}"/*.patch; do
+    [[ -f "${patch}" ]] || continue
+    echo "    $(basename "${patch}")"
+    git -C "${SOURCE}" apply "${patch}"
+done
 
 mkdir -p "${OUTPUT}"
 
@@ -208,6 +218,12 @@ EOF
 
     cp "${build}"/subprojects/libdrm-*/libdrm.so "${destination}/"
     cp "${TOOLCHAIN}/sysroot/usr/lib/${triple}/libc++_shared.so" "${destination}/"
+
+    # Mesa's EGL keeps the soname `libEGL.so`, and a file of that name in the app's library
+    # directory sits ahead of Android's on the search path — every `DT_NEEDED: libEGL.so` in the
+    # process, the shim's included, would then resolve to Mesa's. Only the shim's explicit dlopen
+    # should reach it, so it ships under a name nothing else asks for.
+    mv "${destination}/libEGL.so" "${destination}/libEGL_zink.so"
 
     [[ -f "${destination}/libGL.so" ]] || { echo "No libGL.so produced for ${abi}" >&2; exit 1; }
     for library in "${destination}"/*.so; do
