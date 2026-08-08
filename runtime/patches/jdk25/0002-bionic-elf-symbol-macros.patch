@@ -1,0 +1,30 @@
+diff --git a/src/hotspot/share/utilities/elfFile.hpp b/src/hotspot/share/utilities/elfFile.hpp
+index 0caafc764..4bc218155 100644
+--- a/src/hotspot/share/utilities/elfFile.hpp
++++ b/src/hotspot/share/utilities/elfFile.hpp
+@@ -46,7 +46,11 @@ typedef Elf64_Shdr      Elf_Shdr;
+ typedef Elf64_Phdr      Elf_Phdr;
+ typedef Elf64_Sym       Elf_Sym;
+ 
+-#if !defined(_ALLBSD_SOURCE) || defined(__APPLE__)
++// Android already defines ELF_ST_TYPE and ELF_ST_BIND to the width-independent forms, and defines
++// ELF64_ST_TYPE in terms of them. Redefining ELF_ST_TYPE to ELF64_ST_TYPE would therefore be
++// circular: the preprocessor refuses to expand a macro inside its own expansion, leaving a bare
++// identifier that fails to compile. bionic's definitions are correct for both widths as they are.
++#if (!defined(_ALLBSD_SOURCE) || defined(__APPLE__)) && !defined(__BIONIC__)
+ #define ELF_ST_TYPE ELF64_ST_TYPE
+ #endif
+ 
+@@ -62,7 +66,11 @@ typedef Elf32_Shdr      Elf_Shdr;
+ typedef Elf32_Phdr      Elf_Phdr;
+ typedef Elf32_Sym       Elf_Sym;
+ 
+-#if !defined(_ALLBSD_SOURCE) || defined(__APPLE__)
++// Android already defines ELF_ST_TYPE and ELF_ST_BIND to the width-independent forms, and defines
++// ELF64_ST_TYPE in terms of them. Redefining ELF_ST_TYPE to ELF64_ST_TYPE would therefore be
++// circular: the preprocessor refuses to expand a macro inside its own expansion, leaving a bare
++// identifier that fails to compile. bionic's definitions are correct for both widths as they are.
++#if (!defined(_ALLBSD_SOURCE) || defined(__APPLE__)) && !defined(__BIONIC__)
+ #define ELF_ST_TYPE ELF32_ST_TYPE
+ #endif
+ #endif

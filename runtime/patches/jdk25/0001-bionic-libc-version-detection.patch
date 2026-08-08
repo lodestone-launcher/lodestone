@@ -1,0 +1,25 @@
+diff --git a/src/hotspot/os/linux/os_linux.cpp b/src/hotspot/os/linux/os_linux.cpp
+index e4b8c9a97..4d4351065 100644
+--- a/src/hotspot/os/linux/os_linux.cpp
++++ b/src/hotspot/os/linux/os_linux.cpp
+@@ -689,12 +689,18 @@ void os::init_system_properties_values() {
+ 
+ void os::Linux::libpthread_init() {
+   // Save glibc and pthread version strings.
+-#if !defined(_CS_GNU_LIBC_VERSION) || \
++#if defined(__BIONIC__)
++  // Android's libc provides neither confstr key, and has no separate pthread library to
++  // version: the threading implementation lives inside libc itself.
++#elif !defined(_CS_GNU_LIBC_VERSION) || \
+     !defined(_CS_GNU_LIBPTHREAD_VERSION)
+   #error "glibc too old (< 2.3.2)"
+ #endif
+ 
+-#ifdef MUSL_LIBC
++#if defined(__BIONIC__)
++  os::Linux::set_libc_version("bionic - unknown");
++  os::Linux::set_libpthread_version("bionic - unknown");
++#elif defined(MUSL_LIBC)
+   // confstr() from musl libc returns EINVAL for
+   // _CS_GNU_LIBC_VERSION and _CS_GNU_LIBPTHREAD_VERSION
+   os::Linux::set_libc_version("musl - unknown");

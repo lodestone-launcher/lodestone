@@ -1,0 +1,16 @@
+diff --git a/make/autoconf/jdk-options.m4 b/make/autoconf/jdk-options.m4
+index 6091d155b..a0635fcc8 100644
+--- a/make/autoconf/jdk-options.m4
++++ b/make/autoconf/jdk-options.m4
+@@ -199,6 +199,11 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_JDK_OPTIONS],
+   if test "x$OPENJDK_TARGET_CPU" = xs390x ; then
+     INCLUDE_SA=false
+   fi
++  # The Serviceability Agent reads core dumps through procfs structures Android does not provide:
++  # bionic ships neither prstatus_t nor <linux/elfcore.h>, so libsaproc cannot be built without
++  # reimplementing them. It backs jstack, jmap and jhsdb against a core file, none of which apply
++  # to a phone, so it is dropped rather than ported.
++  INCLUDE_SA=false
+   AC_SUBST(INCLUDE_SA)
+ 
+   # Setup default CDS alignment. On platforms where one build may run on machines with different
