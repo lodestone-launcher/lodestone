@@ -1,0 +1,54 @@
+diff --git a/hotspot/src/os/linux/vm/os_linux.cpp b/hotspot/src/os/linux/vm/os_linux.cpp
+index 742e17d1..40282dc2 100644
+--- a/hotspot/src/os/linux/vm/os_linux.cpp
++++ b/hotspot/src/os/linux/vm/os_linux.cpp
+@@ -96,7 +96,9 @@
+ # include <string.h>
+ # include <syscall.h>
+ # include <sys/sysinfo.h>
++#ifndef __BIONIC__
+ # include <gnu/libc-version.h>
++#endif
+ # include <sys/ipc.h>
+ # include <sys/shm.h>
+ # include <link.h>
+@@ -596,6 +598,15 @@ void os::Linux::libpthread_init() {
+ # define _CS_GNU_LIBPTHREAD_VERSION 3
+ # endif
+ 
++#if defined(__BIONIC__)
++  // Android's confstr() answers neither key, and there is no gnu_get_libc_version() to fall back
++  // on. bionic has no separate pthread library to version either -- threading lives inside libc --
++  // and it behaves the way the code below cares about NPTL behaving: floating stacks and no hard
++  // limit on the thread count.
++  os::Linux::set_glibc_version("bionic - unknown");
++  os::Linux::set_libpthread_version("bionic - unknown");
++  os::Linux::set_is_NPTL();
++#else
+   size_t n = confstr(_CS_GNU_LIBC_VERSION, NULL, 0);
+   if (n > 0) {
+      char *str = (char *)malloc(n, mtInternal);
+@@ -637,6 +648,7 @@ void os::Linux::libpthread_init() {
+   } else {
+      os::Linux::set_is_LinuxThreads();
+   }
++#endif
+ 
+   // LinuxThreads have two flavors: floating-stack mode, which allows variable
+   // stack size; and fixed-stack mode. NPTL is always floating-stack.
+diff --git a/hotspot/src/os_cpu/linux_aarch64/vm/os_linux_aarch64.cpp b/hotspot/src/os_cpu/linux_aarch64/vm/os_linux_aarch64.cpp
+index db1cb104..f6f53f60 100644
+--- a/hotspot/src/os_cpu/linux_aarch64/vm/os_linux_aarch64.cpp
++++ b/hotspot/src/os_cpu/linux_aarch64/vm/os_linux_aarch64.cpp
+@@ -72,7 +72,11 @@
+ # include <pwd.h>
+ # include <poll.h>
+ # include <ucontext.h>
++#ifndef __BIONIC__
++// glibc-only, and only ever used on the x86 ports: every FPU control-word entry point below is
++// already an empty stub on aarch64.
+ # include <fpu_control.h>
++#endif
+ 
+ #define REG_FP 29
+ 

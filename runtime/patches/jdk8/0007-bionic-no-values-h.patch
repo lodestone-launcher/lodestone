@@ -1,0 +1,20 @@
+diff --git a/jdk/src/solaris/native/java/net/net_util_md.c b/jdk/src/solaris/native/java/net/net_util_md.c
+index bd0bd8c2..4c9bccc0 100644
+--- a/jdk/src/solaris/native/java/net/net_util_md.c
++++ b/jdk/src/solaris/native/java/net/net_util_md.c
+@@ -35,7 +35,14 @@
+ #include <dlfcn.h>
+ #include <sys/time.h>
+ 
+-#ifndef _ALLBSD_SOURCE
++#ifdef __BIONIC__
++// <values.h> is a legacy glibc compatibility header bionic does not ship, and MAXINT is the only
++// name this file takes from it.
++#include <limits.h>
++#ifndef MAXINT
++#define MAXINT INT_MAX
++#endif
++#elif !defined(_ALLBSD_SOURCE)
+ #include <values.h>
+ #else
+ #include <limits.h>

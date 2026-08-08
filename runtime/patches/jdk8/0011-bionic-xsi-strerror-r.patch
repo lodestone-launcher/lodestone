@@ -1,0 +1,35 @@
+diff --git a/jdk/src/solaris/native/common/jni_util_md.c b/jdk/src/solaris/native/common/jni_util_md.c
+index 598dc41e..548bf861 100644
+--- a/jdk/src/solaris/native/common/jni_util_md.c
++++ b/jdk/src/solaris/native/common/jni_util_md.c
+@@ -37,7 +37,10 @@ char* nativeGetStringPlatformChars(JNIEnv *env, jstring jstr, jboolean *isCopy)
+     return NULL;
+ }
+ 
+-#if defined(LINUX) && (defined(_GNU_SOURCE) || \
++// The alias below reaches past glibc's GNU strerror_r, which returns char*, to the XSI one that
++// returns int and matches what getErrorString promises. bionic has GNU semantics too but exposes no
++// second entry point to reach past them, so getErrorString adapts by hand instead.
++#if defined(LINUX) && !defined(__BIONIC__) && (defined(_GNU_SOURCE) || \
+          (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE < 200112L \
+              && defined(_XOPEN_SOURCE) && _XOPEN_SOURCE < 600))
+ extern int __xpg_strerror_r(int, char *, size_t);
+@@ -70,5 +73,18 @@ int
+ getErrorString(int err, char *buf, size_t len)
+ {
+     if (err == 0 || len < 1) return 0;
++#if defined(__BIONIC__)
++    {
++        // GNU strerror_r returns a pointer that need not be buf: static storage for a known errno,
++        // buf only for the "Unknown error" case. Callers here read buf, so copy when it differs.
++        const char *msg = strerror_r(err, buf, len);
++        if (msg != buf) {
++            strncpy(buf, msg, len - 1);
++            buf[len - 1] = '\0';
++        }
++    }
++    return 0;
++#else
+     return strerror_r(err, buf, len);
++#endif
+ }

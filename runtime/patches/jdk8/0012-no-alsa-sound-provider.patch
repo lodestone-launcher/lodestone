@@ -1,0 +1,17 @@
+diff --git a/jdk/make/lib/SoundLibraries.gmk b/jdk/make/lib/SoundLibraries.gmk
+index b59a9462..6836f3ff 100644
+--- a/jdk/make/lib/SoundLibraries.gmk
++++ b/jdk/make/lib/SoundLibraries.gmk
+@@ -67,7 +67,11 @@ ifeq ($(OPENJDK_TARGET_OS), windows)
+ endif # OPENJDK_TARGET_OS windows
+ 
+ ifeq ($(OPENJDK_TARGET_OS), linux)
+-  EXTRA_SOUND_JNI_LIBS += jsoundalsa
++  # libjsoundalsa is the one library in the JDK that links ALSA's symbols instead of dlopening them,
++  # and Android has no ALSA userspace to link against -- only the headers this build stages into the
++  # sysroot. Leaving it out keeps the portable libjsound, which then reports no mixers, and Minecraft
++  # drives audio through OpenAL rather than javax.sound anyway. EXTRA_SOUND_JNI_LIBS is also what
++  # com.sun.media.sound.Platform loads at runtime, so dropping it here keeps the two in step.
+   LIBJSOUND_CFLAGS += -DX_PLATFORM=X_LINUX
+ endif # OPENJDK_TARGET_OS linux
+ 

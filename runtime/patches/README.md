@@ -135,12 +135,86 @@ These have not been reproduced yet, and some may prove to be non-issues like the
 - **Large pages** — must be forced off; Android does not expose `hugetlbfs`.
 - **CDS archive** — cannot be dumped at build time for a foreign architecture.
 
-### JDK 8 specifically
+## JDK 8 — a different patch set entirely
 
-`jdk8u` predates the unified build system: HotSpot still builds from its own makefiles under
-`hotspot/make`, which detect the compiler and platform separately from `configure`. It is by some
-margin the hardest of the four, and it also has none of the musl portability work the modern
-releases inherited. Build 17, 21 and 25 first.
+`jdk8/` shares none of its thirteen patches with the other three, and not because the same problems
+were spelled differently: only two of the six recur at all. jdk8u predates both the unified build
+system and the musl portability work, so the modern set's `dlinfo`, `netinet/in.h` and
+`--disable-new-dtags` problems simply are not in this source, and a different set is.
+
+Verified against `openjdk/jdk8u` at `aa3f9dea`, which is what the published tarball was built from.
+All thirteen apply at zero offset and zero fuzz.
+
+Two things make 8 structurally different from 17/21/25:
+
+- **HotSpot builds from `hotspot/make`, not from `configure`.** Its makefiles derive their own
+  flags, and `configure` feeds them a `LEGACY_*` set. That set is where the first patch lives.
+- **`configure` is a checked-in `generated-configure.sh`**, so any `.m4` change has to be mirrored
+  into the generated script. The wrapper only regenerates when `hg` is on `PATH`, which it is not in
+  the build image, so the two are edited together and stay consistent.
+
+### Patches written for 8
+
+- **`0001-hotspot-host-tools-target-flags.patch`** — `flags.m4` appends `--with-extra-*` to both
+  `LEGACY_TARGET_*` and `LEGACY_HOST_*`. The host set compiles `adlc` and the JVMTI and JFR
+  generators, which run on the build machine, so on a cross build `adlc` is linked with `-landroid
+  -llog` and the host linker has no such libraries. Restricted to non-cross builds.
+- **`0002-clang-assembler-prfum.patch`** — `copy_linux_aarch64.s` writes `prfm pldl1keep, [s, #-256]`.
+  PRFM's scaled immediate encodes no negative offset; GNU as silently rewrites it to the unscaled
+  form, and clang's integrated assembler rejects it. Spelled `prfum`.
+- **`0003-bionic-elf-symbol-macros.patch`** — the same circular `ELF_ST_TYPE` expansion as the
+  modern set's `0002`, in `hotspot/src/share/vm/utilities/elfFile.hpp`.
+- **`0004-bionic-sigcld-alias.patch`** — bionic omits the System V `SIGCLD` alias, leaving
+  `siglabels[]` an incomplete type. Defined to `SIGCHLD`, so `sun.misc.Signal("CLD")` keeps working.
+- **`0005-bionic-libc-version-detection.patch`** — 8's `libpthread_init` is the pre-musl version: it
+  calls `confstr`, which bionic does not have at all, and falls back to `gnu_get_libc_version` from
+  `<gnu/libc-version.h>`, which bionic also does not have. A `__BIONIC__` branch names the libc and
+  declares NPTL semantics, which is what the surrounding floating-stack logic actually tests for.
+  Also drops the `<fpu_control.h>` include from `os_linux_aarch64.cpp`, where every FPU control-word
+  entry point is already an empty stub.
+- **`0006-disable-serviceability-agent-native.patch`** — as on the modern releases, but 8 has no
+  `INCLUDE_SA`: the gate is `BUILDLIBSAPROC` in `saproc.make` plus `ADD_SA_BINARIES/aarch64` in
+  `defs.make`. The Java half still builds.
+- **`0007-bionic-no-values-h.patch`** — `net_util_md.c` includes glibc's legacy `<values.h>` for
+  `MAXINT` alone.
+- **`0008-no-warnings-as-errors-libsctp.patch`** — 8 has no `--disable-warnings-as-errors`, and
+  `libsctp` is the one place it promotes warnings to errors.
+- **`0009-bionic-no-confstr.patch`** — `LinuxVirtualMachine.isLinuxThreads` calls `confstr`. On
+  bionic the answer is always "no".
+- **`0010-honour-disable-headful.patch`** — `--disable-headful` printed *"headless only"* and then
+  built `libawt_xawt`, the GTK peers and `libsplashscreen` anyway: `configure` never defined
+  `BUILD_HEADLESS_ONLY`, and `CompileJavaClasses.gmk` still carries the *"TODO: Add
+  BUILD_HEADLESS_ONLY to configure?"* that says so. Every consumer was already written; only the
+  definition was missing, and `spec.gmk.in` can derive it from the `SUPPORT_HEADFUL` it already
+  substitutes. Without this the build reaches `XToolkit.c` and its `backtrace` from `<execinfo.h>`.
+- **`0011-bionic-xsi-strerror-r.patch`** — `jni_util_md.c` reaches past glibc's GNU `strerror_r` to
+  the XSI `__xpg_strerror_r`, so that `getErrorString` can return an `int`. bionic gives
+  `strerror_r` GNU semantics too but exposes no second entry point, so `getErrorString` copies the
+  returned string into the caller's buffer instead.
+- **`0012-no-alsa-sound-provider.patch`** — `libjsoundalsa` is the one library in the JDK that links
+  ALSA's symbols rather than dlopening them, so the Dockerfile's stub cannot satisfy it. Dropping it
+  from `EXTRA_SOUND_JNI_LIBS` removes it from both the build and what
+  `com.sun.media.sound.Platform` loads. The portable `libjsound` stays and reports no mixers.
+- **`0013-headless-jawt.patch`** — `JAWT_GetAWT` only returns "no AWT here" when `JAVASE_EMBEDDED`
+  *and* `HEADLESS` are set, so any other headless build links `libjawt` against X11 entry points
+  that are not there. Headless alone is the condition that matters.
+
+### What 8 does *not* need
+
+- **`DT_RUNPATH`** — 8 emits `-Wl,-rpath,$$ORIGIN` with no `--disable-new-dtags`, so lld's default
+  new dtags apply and the tag is already `DT_RUNPATH`. Confirmed on the artifact:
+  `readelf -d libnio.so` reads `RUNPATH [$ORIGIN]`, with a literal `$`.
+- **`--with-freetype=bundled`** — works, because jdk8u carries freetype sources at
+  `jdk/src/share/native/sun/awt/libfreetype` and builds `libfreetype.so` for the target.
+- **`dlinfo` and `netinet/in.h`** — 8 calls neither; `net_util_md.h` already includes the header.
+
+### `libc++_shared.so`
+
+8's `libjvm.so` carries a `DT_NEEDED` on `libc++_shared.so`, which 17, 21 and 25 do not: modern
+HotSpot links its C++ runtime statically, while 8's `hotspot/make` sets `STATIC_CXX` only for gcc.
+Nothing is shipped inside the runtime for it. The APK already contains `libc++_shared.so`, and
+`liblodestone_jvm.so` — the library that `dlopen`s `libjvm.so` — links it, so it is loaded under
+that soname before HotSpot is opened.
 
 ## Which runtimes Minecraft actually asks for
 

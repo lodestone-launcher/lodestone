@@ -1,0 +1,58 @@
+diff --git a/common/autoconf/flags.m4 b/common/autoconf/flags.m4
+index 5d1ef873..dc3065e2 100644
+--- a/common/autoconf/flags.m4
++++ b/common/autoconf/flags.m4
+@@ -455,14 +455,20 @@ AC_DEFUN_ONCE([FLAGS_SETUP_COMPILER_FLAGS_FOR_JDK],
+   LDFLAGS_JDK="${LDFLAGS_JDK} $with_extra_ldflags"
+ 
+   # Hotspot needs these set in their legacy form
+-  LEGACY_HOST_CFLAGS="$LEGACY_HOST_CFLAGS $with_extra_cflags"
+   LEGACY_TARGET_CFLAGS="$LEGACY_TARGET_CFLAGS $with_extra_cflags"
+-  LEGACY_HOST_CXXFLAGS="$LEGACY_HOST_CXXFLAGS $with_extra_cxxflags"
+   LEGACY_TARGET_CXXFLAGS="$LEGACY_TARGET_CXXFLAGS $with_extra_cxxflags"
+-  LEGACY_HOST_LDFLAGS="$LEGACY_HOST_LDFLAGS $with_extra_ldflags"
+   LEGACY_TARGET_LDFLAGS="$LEGACY_TARGET_LDFLAGS $with_extra_ldflags"
+-  LEGACY_HOST_ASFLAGS="$with_extra_asflags"
+   LEGACY_TARGET_ASFLAGS="$with_extra_asflags"
++  # The LEGACY_HOST_* set feeds HotSpot's build-host tools -- adlc, the JVMTI and JFR generators --
++  # which run on the build machine. --with-extra-* describes the target, so on a cross build those
++  # flags are not merely useless there but fatal: adlc gets linked with -landroid -llog and the
++  # host linker has no such libraries.
++  if test "x$COMPILE_TYPE" != "xcross"; then
++    LEGACY_HOST_CFLAGS="$LEGACY_HOST_CFLAGS $with_extra_cflags"
++    LEGACY_HOST_CXXFLAGS="$LEGACY_HOST_CXXFLAGS $with_extra_cxxflags"
++    LEGACY_HOST_LDFLAGS="$LEGACY_HOST_LDFLAGS $with_extra_ldflags"
++    LEGACY_HOST_ASFLAGS="$with_extra_asflags"
++  fi
+ 
+   AC_SUBST(LEGACY_HOST_CFLAGS)
+   AC_SUBST(LEGACY_HOST_CXXFLAGS)
+diff --git a/common/autoconf/generated-configure.sh b/common/autoconf/generated-configure.sh
+index 344c3164..5aae4293 100644
+--- a/common/autoconf/generated-configure.sh
++++ b/common/autoconf/generated-configure.sh
+@@ -42754,14 +42754,20 @@ fi
+   LDFLAGS_JDK="${LDFLAGS_JDK} $with_extra_ldflags"
+ 
+   # Hotspot needs these set in their legacy form
+-  LEGACY_HOST_CFLAGS="$LEGACY_HOST_CFLAGS $with_extra_cflags"
+   LEGACY_TARGET_CFLAGS="$LEGACY_TARGET_CFLAGS $with_extra_cflags"
+-  LEGACY_HOST_CXXFLAGS="$LEGACY_HOST_CXXFLAGS $with_extra_cxxflags"
+   LEGACY_TARGET_CXXFLAGS="$LEGACY_TARGET_CXXFLAGS $with_extra_cxxflags"
+-  LEGACY_HOST_LDFLAGS="$LEGACY_HOST_LDFLAGS $with_extra_ldflags"
+   LEGACY_TARGET_LDFLAGS="$LEGACY_TARGET_LDFLAGS $with_extra_ldflags"
+-  LEGACY_HOST_ASFLAGS="$with_extra_asflags"
+   LEGACY_TARGET_ASFLAGS="$with_extra_asflags"
++  # The LEGACY_HOST_* set feeds HotSpot's build-host tools -- adlc, the JVMTI and JFR generators --
++  # which run on the build machine. --with-extra-* describes the target, so on a cross build those
++  # flags are not merely useless there but fatal: adlc gets linked with -landroid -llog and the
++  # host linker has no such libraries.
++  if test "x$COMPILE_TYPE" != "xcross"; then
++    LEGACY_HOST_CFLAGS="$LEGACY_HOST_CFLAGS $with_extra_cflags"
++    LEGACY_HOST_CXXFLAGS="$LEGACY_HOST_CXXFLAGS $with_extra_cxxflags"
++    LEGACY_HOST_LDFLAGS="$LEGACY_HOST_LDFLAGS $with_extra_ldflags"
++    LEGACY_HOST_ASFLAGS="$with_extra_asflags"
++  fi
+ 
+ 
+ 

@@ -1,0 +1,47 @@
+diff --git a/hotspot/make/linux/makefiles/defs.make b/hotspot/make/linux/makefiles/defs.make
+index ec414639..1487318d 100644
+--- a/hotspot/make/linux/makefiles/defs.make
++++ b/hotspot/make/linux/makefiles/defs.make
+@@ -309,18 +309,16 @@ ADD_SA_BINARIES/x86   = $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.$(LIBRARY_SUFFIX) \
+                         $(EXPORT_LIB_DIR)/sa-jdi.jar
+ ADD_SA_BINARIES/sparc = $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.$(LIBRARY_SUFFIX) \
+                         $(EXPORT_LIB_DIR)/sa-jdi.jar
+-ADD_SA_BINARIES/aarch64 = $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.$(LIBRARY_SUFFIX) \
+-                        $(EXPORT_LIB_DIR)/sa-jdi.jar
++# No libsaproc on Android; see saproc.make.
++ADD_SA_BINARIES/aarch64 = $(EXPORT_LIB_DIR)/sa-jdi.jar
+ ifeq ($(ENABLE_FULL_DEBUG_SYMBOLS),1)
+   ifneq ($(STRIP_POLICY),no_strip)
+     ifeq ($(ZIP_DEBUGINFO_FILES),1)
+       ADD_SA_BINARIES/x86     += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.diz
+       ADD_SA_BINARIES/sparc   += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.diz
+-      ADD_SA_BINARIES/aarch64 += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.diz
+     else
+       ADD_SA_BINARIES/x86     += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.debuginfo
+       ADD_SA_BINARIES/sparc   += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.debuginfo
+-      ADD_SA_BINARIES/aarch64 += $(EXPORT_JRE_LIB_ARCH_DIR)/libsaproc.debuginfo
+     endif
+   endif
+ endif
+diff --git a/hotspot/make/linux/makefiles/saproc.make b/hotspot/make/linux/makefiles/saproc.make
+index ffc0ec5c..012f765a 100644
+--- a/hotspot/make/linux/makefiles/saproc.make
++++ b/hotspot/make/linux/makefiles/saproc.make
+@@ -67,11 +67,12 @@ endif
+ # if $(AGENT_DIR) does not exist, we don't build SA
+ # also, we don't build SA on Itanium or zero.
+ 
+-ifneq ($(wildcard $(AGENT_DIR)),)
+-ifneq ($(filter-out ia64 zero,$(SRCARCH)),)
+-  BUILDLIBSAPROC = $(LIBSAPROC)
+-endif
+-endif
++# The Serviceability Agent's debugger back-end is not built for Android. It talks to a live process
++# through libthread_db and to a core file through <sys/procfs.h>, and bionic has neither: no
++# thread_db.h, no prstatus_t. It backs jstack, jmap and jhsdb against a core file, none of which
++# apply on a phone, so it is dropped rather than reimplemented. The Java half (sa-jdi.jar) still
++# builds, because nothing in it is platform-specific.
++BUILDLIBSAPROC =
+ 
+ ifneq ($(ALT_SASRCDIR),)
+ ALT_SAINCDIR=-I$(ALT_SASRCDIR) -DALT_SASRCDIR

@@ -1,0 +1,18 @@
+diff --git a/common/autoconf/spec.gmk.in b/common/autoconf/spec.gmk.in
+index ea4ec8e1..7eb68ba6 100644
+--- a/common/autoconf/spec.gmk.in
++++ b/common/autoconf/spec.gmk.in
+@@ -232,6 +232,13 @@ SUPPORT_HEADFUL:=@SUPPORT_HEADFUL@
+ SUPPORT_HEADLESS:=@SUPPORT_HEADLESS@
+ # Legacy defines controlled by the SUPPORT_HEADLESS and SUPPORT_HEADFUL options.
+ @BUILD_HEADLESS@
++# configure never derived BUILD_HEADLESS_ONLY from --disable-headful -- see the "TODO: Add
++# BUILD_HEADLESS_ONLY to configure?" in CompileJavaClasses.gmk -- so the option printed "headless
++# only" and then built libawt_xawt, the GTK peers and libsplashscreen anyway. Every consumer of the
++# variable is already written; only its definition was missing.
++ifneq ($(SUPPORT_HEADFUL), yes)
++  BUILD_HEADLESS_ONLY := true
++endif
+ 
+ # These are the libjvms that we want to build.
+ # The java launcher uses the default.
