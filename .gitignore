@@ -35,4 +35,5 @@ app/src/main/jniLibs/*/libEGL_zink.so
 app/src/main/jniLibs/*/libgallium_dri.so
 app/src/main/jniLibs/*/libdrm.so
 app/src/main/jniLibs/*/libcutils.so
+app/src/main/jniLibs/*/libvulkan_freedreno.so
 /out/

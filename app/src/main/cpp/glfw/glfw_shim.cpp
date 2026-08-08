@@ -45,6 +45,12 @@ void* loadTranslationLayer(const char* path, const char* eglLibrary) {
         setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 0);
         setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 0);
         setenv("GALLIUM_THREAD", "0", 0);
+        // Android's Vulkan loader only offers the vendor driver, and Qualcomm's exposes no
+        // VK_EXT_external_memory_dma_buf. Zink needs it to render into the window's gralloc buffer:
+        // without it every import fails, the game draws into an off-screen buffer of Mesa's own and
+        // the surface is presented untouched — a black screen. Turnip supports it, so ship it and
+        // point Zink at it, leaving the loader's default for devices we have no driver for.
+        setenv("ZINK_VULKAN_LIBRARY", "libvulkan_freedreno.so", 0);
     } else {
         // gl4es reads these to find the drivers it forwards to. Setting them here rather than
         // baking them in at build time keeps one binary working across vendors, and they have to be
