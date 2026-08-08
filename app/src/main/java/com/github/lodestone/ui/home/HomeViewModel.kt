@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import android.content.Context
 import android.content.Intent
 import com.github.lodestone.BuildConfig
+import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.repository.AccountRepository
 import com.github.lodestone.data.repository.InstallStage
 import com.github.lodestone.data.repository.RuntimeInstaller
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -70,6 +72,7 @@ class HomeViewModel(
     private val runtimeInstaller: RuntimeInstaller,
     private val buildLaunchSpec: BuildLaunchSpecUseCase,
     private val accounts: AccountRepository,
+    private val settings: SettingsStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -203,7 +206,10 @@ class HomeViewModel(
             version = version,
             account = account,
             environment = environment,
-            options = LaunchOptions(verboseVmStartup = BuildConfig.DEBUG),
+            options = LaunchOptions(
+                renderer = settings.renderer.first(),
+                verboseVmStartup = BuildConfig.DEBUG,
+            ),
             nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
         )
         when (result) {

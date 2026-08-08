@@ -17,6 +17,8 @@ import com.github.lodestone.ui.accounts.AccountsScreen
 import com.github.lodestone.ui.accounts.AccountsViewModel
 import com.github.lodestone.ui.home.HomeScreen
 import com.github.lodestone.ui.home.HomeViewModel
+import com.github.lodestone.ui.settings.SettingsScreen
+import com.github.lodestone.ui.settings.SettingsViewModel
 import com.github.lodestone.ui.signin.SignInScreen
 import com.github.lodestone.ui.signin.SignInViewModel
 import kotlinx.serialization.Serializable
@@ -29,6 +31,9 @@ private data object AccountsRoute : NavKey
 
 @Serializable
 private data object SignInRoute : NavKey
+
+@Serializable
+private data object SettingsRoute : NavKey
 
 /**
  * The launcher's screens and the paths between them.
@@ -56,8 +61,17 @@ fun LodestoneApp(graph: AppGraph, modifier: Modifier = Modifier) {
                         graph.runtimeInstaller,
                         graph.buildLaunchSpec,
                         graph.accounts,
+                        graph.settings,
                     ) },
                     onOpenAccounts = { backStack.add(AccountsRoute) },
+                    onOpenSettings = { backStack.add(SettingsRoute) },
+                )
+            }
+
+            entry<SettingsRoute> {
+                SettingsScreen(
+                    viewModel = graphViewModel { SettingsViewModel(graph.settings) },
+                    onBack = { backStack.removeLastOrNull() },
                 )
             }
 

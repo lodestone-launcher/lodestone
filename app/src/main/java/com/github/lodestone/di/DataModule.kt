@@ -1,7 +1,9 @@
 package com.github.lodestone.di
 
 import android.content.Context
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.remote.download.DownloadEngine
 import com.github.lodestone.data.repository.RuntimeInstaller
 import com.github.lodestone.data.repository.VersionInstaller
@@ -68,7 +70,19 @@ interface DataModule {
     @Provides
     @SingleIn(AppScope::class)
     fun provideJavaRuntimeManager(files: GameFiles): JavaRuntimeManager = JavaRuntimeManager(files)
+
+    /**
+     * Kept in the launcher process, which is the only one that reads it: the game process is handed
+     * a resolved launch request and never has to ask what was chosen.
+     */
+    @Provides
+    @SingleIn(AppScope::class)
+    fun provideSettingsStore(context: Context): SettingsStore = SettingsStore(
+        PreferenceDataStoreFactory.create { File(context.filesDir, SETTINGS_FILE) },
+    )
 }
 
 /** Packaged from the same path the published manifest is served from. */
 private const val RUNTIME_MANIFEST_ASSET = "runtimes.json"
+
+private const val SETTINGS_FILE = "settings.preferences_pb"

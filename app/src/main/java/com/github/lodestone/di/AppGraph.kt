@@ -2,6 +2,7 @@ package com.github.lodestone.di
 
 import android.app.Application
 import android.content.Context
+import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.remote.microsoft.MicrosoftAuthApi
 import com.github.lodestone.data.repository.AccountRepository
 import com.github.lodestone.data.repository.RuntimeInstaller
@@ -40,4 +41,6 @@ interface AppGraph {
     val accounts: AccountRepository
 
     val microsoftAuth: MicrosoftAuthApi
+
+    val settings: SettingsStore
 }
