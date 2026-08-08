@@ -184,10 +184,43 @@ class VersionParsingTest {
     }
 
     @Test
-    fun `lwjgl 2 versions are reported rather than served a 3 x set`() = runTest {
+    fun `lwjgl 2 versions are served by the compatibility layer`() = runTest {
+        // The group id is the whole discriminator: 1.7.10 pins org.lwjgl.lwjgl:lwjgl:2.9.1, where
+        // every version from 1.13 on pins org.lwjgl:lwjgl.
         assertEquals(
-            LwjglSelection.Unsupported("2.9.1"),
+            LwjglSelection.Compat2("2.9.1", LwjglNativeSet.COMPAT2),
             resolve("1.7.10").lwjglSelection(android),
+        )
+        assertEquals(
+            LwjglSelection.Packaged("3.3.3", LwjglNativeSet.V3_3_3),
+            resolve("1.21.4").lwjglSelection(android),
+        )
+    }
+
+    @Test
+    fun `the compatibility layer displaces lwjgl 2 and jinput but keeps lwjgl_util`() = runTest {
+        val superseded = resolve("1.7.10").classpathLibraries(android)
+            .filter(LibraryArtifact::isSupersededByLwjgl2Compat)
+            .map { it.library.coordinate?.moduleKey }
+        // lwjgl_util is 116 classes of pure Java that collide with nothing in LWJGL 3 and supply
+        // GLU and the matrix and vector types, so it stays.
+        assertTrue(
+            "$superseded still lists lwjgl_util",
+            superseded.none { it?.startsWith("org.lwjgl.lwjgl:lwjgl_util") == true },
+        )
+        assertTrue(
+            "$superseded does not drop LWJGL 2 itself",
+            superseded.any { it?.startsWith("org.lwjgl.lwjgl:lwjgl:") == true },
+        )
+        assertTrue(
+            "$superseded does not drop jinput",
+            superseded.any { it?.startsWith("net.java.jinput:") == true },
+        )
+
+        // A version on LWJGL 3 has nothing for the layer to stand in for.
+        assertTrue(
+            resolve("1.21.4").classpathLibraries(android)
+                .none(LibraryArtifact::isSupersededByLwjgl2Compat),
         )
     }
 

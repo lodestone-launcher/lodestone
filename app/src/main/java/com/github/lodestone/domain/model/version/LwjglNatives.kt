@@ -22,6 +22,25 @@ enum class LwjglNativeSet(val version: String) {
         const val ASSET_ROOT = "lwjgl"
 
         /**
+         * The set the LWJGL 2 compatibility layer is built on.
+         *
+         * Pinned rather than following the newest set, because the layer bundles that release's
+         * Java bindings and the relocated JNI library beside this set was generated from the same
+         * tag. Moving it means rebuilding both together.
+         */
+        val COMPAT2 = V3_3_3
+
+        /**
+         * Where the relocated OpenGL bindings sit inside a set, relative to the ABI directory.
+         *
+         * The compatibility layer declares `org.lwjgl.opengl.GL11` itself, so the LWJGL 3 class of
+         * that name is relocated out of its way and its JNI symbols renamed to match. Same file
+         * name as the stock library, because the relocated Java side still asks for `lwjgl_opengl`;
+         * only the directory tells them apart.
+         */
+        const val COMPAT2_OPENGL = "lwjgl2/liblwjgl_opengl.so"
+
+        /**
          * The libraries that make up a set.
          *
          * Only these four are generated from the bindings of one exact release, which is what makes
@@ -96,8 +115,13 @@ sealed interface LwjglSelection {
         val isExact: Boolean get() = requested == set.version
     }
 
-    /** The version pins LWJGL 2, which none of the packaged sets can stand in for. */
-    data class Unsupported(val requested: String) : LwjglSelection
+    /**
+     * The version pins LWJGL 2, for which no arm64 build exists or ever will.
+     *
+     * Served by the compatibility layer instead: it declares LWJGL 2's API and forwards it to
+     * [set], whose relocated OpenGL bindings are installed in place of the stock ones.
+     */
+    data class Compat2(val requested: String, val set: LwjglNativeSet) : LwjglSelection
 
     /** The manifest names no LWJGL at all, so there is nothing to install. */
     data object Absent : LwjglSelection
@@ -119,12 +143,52 @@ fun ResolvedVersion.lwjglSelection(environment: LaunchEnvironment): LwjglSelecti
         .firstOrNull { it.artifact == LWJGL_ARTIFACT && it.group in LWJGL_GROUPS }
         ?: return LwjglSelection.Absent
 
-    return LwjglNativeSet.forVersion(coordinate.version)
-        ?.let { LwjglSelection.Packaged(coordinate.version, it) }
-        ?: LwjglSelection.Unsupported(coordinate.version)
+    // The group id is the whole test, and it is exact rather than a heuristic: every version from
+    // a1.2.6 to 1.12.2 pins org.lwjgl.lwjgl:lwjgl, and 1.13 onwards org.lwjgl:lwjgl.
+    if (coordinate.group == LWJGL2_GROUP) {
+        return LwjglSelection.Compat2(coordinate.version, LwjglNativeSet.COMPAT2)
+    }
+    // Everything else under org.lwjgl is 3 or later. forVersion clamps within 3.x; a future major
+    // lands on the newest set, which is the only one that has grown towards it.
+    val set = LwjglNativeSet.forVersion(coordinate.version) ?: LwjglNativeSet.entries.last()
+    return LwjglSelection.Packaged(coordinate.version, set)
 }
+
+/**
+ * The libraries [this] stands in for, which have to come off the classpath.
+ *
+ * LWJGL 2's own jars are dropped because the layer declares those classes itself and a jar that
+ * also declares them would win or lose by classpath order alone. `lwjgl_util` is the exception:
+ * 116 classes of pure Java with no natives, colliding with nothing in LWJGL 3, and it supplies the
+ * matrix and vector types and GLU for free. jinput is dropped because it is reachable only through
+ * `Controllers`, which the layer stubs, and it would otherwise look for natives that do not exist.
+ */
+fun LibraryArtifact.isSupersededByLwjgl2Compat(): Boolean {
+    val coordinate = library.coordinate ?: return false
+    return when (coordinate.group) {
+        LWJGL2_GROUP -> coordinate.artifact != LWJGL2_UTIL_ARTIFACT
+        in JINPUT_GROUPS -> true
+        else -> false
+    }
+}
+
+/**
+ * Where the compatibility layer is installed, so that it reads as an ordinary library in a launch
+ * log rather than as a path out of nowhere. Versioned by the LWJGL 3 release it is built on.
+ */
+val LWJGL2_COMPAT_COORDINATE = MavenCoordinate(
+    group = "com.github.lodestone",
+    artifact = "lwjgl2-compat",
+    version = LwjglNativeSet.COMPAT2.version,
+)
 
 private const val LWJGL_ARTIFACT = "lwjgl"
 
+private const val LWJGL2_UTIL_ARTIFACT = "lwjgl_util"
+
 /** LWJGL 3 publishes under `org.lwjgl`; LWJGL 2, which pre-1.13 versions pin, under `org.lwjgl.lwjgl`. */
-private val LWJGL_GROUPS = setOf("org.lwjgl", "org.lwjgl.lwjgl")
+private const val LWJGL2_GROUP = "org.lwjgl.lwjgl"
+
+private val LWJGL_GROUPS = setOf("org.lwjgl", LWJGL2_GROUP)
+
+private val JINPUT_GROUPS = setOf("net.java.jinput", "net.java.jutils")

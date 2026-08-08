@@ -1,14 +1,18 @@
 package com.github.lodestone.domain.usecase
 
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.data.local.files.Lwjgl2CompatInstaller
+import com.github.lodestone.data.local.files.Lwjgl2CompatSource
 import com.github.lodestone.data.local.files.LwjglNativesInstaller
 import com.github.lodestone.data.local.files.LwjglNativesSource
 import com.github.lodestone.domain.model.account.MinecraftAccount
 import com.github.lodestone.domain.model.launch.LaunchOptions
 import com.github.lodestone.domain.model.launch.LaunchSpec
+import com.github.lodestone.domain.model.version.LWJGL2_COMPAT_COORDINATE
 import com.github.lodestone.domain.model.version.LaunchEnvironment
 import com.github.lodestone.domain.model.version.LwjglSelection
 import com.github.lodestone.domain.model.version.ResolvedVersion
+import com.github.lodestone.domain.model.version.isSupersededByLwjgl2Compat
 import com.github.lodestone.domain.model.version.lwjglSelection
 import com.github.lodestone.runtime.JavaRuntimeManager
 import timber.log.Timber
@@ -25,6 +29,7 @@ class BuildLaunchSpecUseCase(
     private val files: GameFiles,
     private val runtimes: JavaRuntimeManager,
     private val lwjglNatives: LwjglNativesSource,
+    private val lwjgl2Compat: Lwjgl2CompatSource,
     private val argumentBuilder: LaunchArgumentBuilder = LaunchArgumentBuilder(),
 ) {
 
@@ -33,13 +38,6 @@ class BuildLaunchSpecUseCase(
 
         /** The version needs a Java runtime that is not installed yet. */
         data class MissingRuntime(val feature: Int, val component: String) : Result
-
-        /**
-         * The version pins LWJGL 2. Reported rather than launched: pre-1.13 needs a natives layout
-         * Lodestone does not build yet, and starting it on an LWJGL 3 set would fail somewhere far
-         * from the cause.
-         */
-        data class UnsupportedLwjgl(val version: String) : Result
     }
 
     operator fun invoke(
@@ -54,34 +52,63 @@ class BuildLaunchSpecUseCase(
             ?: return Result.MissingRuntime(feature, version.javaVersion.component)
 
         val selection = version.lwjglSelection(environment)
-        if (selection is LwjglSelection.Unsupported) {
-            return Result.UnsupportedLwjgl(selection.requested)
-        }
 
         // Per version, and the same directory `org.lwjgl.librarypath` names: LWJGL's Java side and
         // its JNI libraries only ever bind to their own release, so the set that lands here is the
         // one this version's manifest pins rather than a global one.
         val nativesDirectory = files.nativesDirectory(version.id)
         nativesDirectory.mkdirs()
-        if (selection is LwjglSelection.Packaged) {
-            if (!selection.isExact) {
-                Timber.w(
-                    "%s pins LWJGL %s; installing the packaged %s set instead",
+        when (selection) {
+            is LwjglSelection.Packaged -> {
+                if (!selection.isExact) {
+                    Timber.w(
+                        "%s pins LWJGL %s; installing the packaged %s set instead",
+                        version.id,
+                        selection.requested,
+                        selection.set.version,
+                    )
+                }
+                LwjglNativesInstaller.install(
+                    set = selection.set,
+                    source = lwjglNatives,
+                    nativeLibraryDir = nativeLibraryDir,
+                    target = nativesDirectory,
+                )
+            }
+
+            is LwjglSelection.Compat2 -> {
+                Timber.i(
+                    "%s pins LWJGL %s; serving it through the compatibility layer on %s",
                     version.id,
                     selection.requested,
                     selection.set.version,
                 )
+                LwjglNativesInstaller.install(
+                    set = selection.set,
+                    source = lwjglNatives,
+                    nativeLibraryDir = nativeLibraryDir,
+                    target = nativesDirectory,
+                    compat2 = true,
+                )
             }
-            LwjglNativesInstaller.install(
-                set = selection.set,
-                source = lwjglNatives,
-                nativeLibraryDir = nativeLibraryDir,
-                target = nativesDirectory,
+
+            LwjglSelection.Absent -> Unit
+        }
+
+        val compatJar = (selection as? LwjglSelection.Compat2)?.let {
+            Lwjgl2CompatInstaller.install(
+                source = lwjgl2Compat,
+                target = files.library(LWJGL2_COMPAT_COORDINATE.path),
             )
         }
 
         val classpath = buildList {
-            version.classpathLibraries(environment).forEach { add(files.library(it.path)) }
+            // Ahead of everything, because it declares the org.lwjgl classes the game asks for and
+            // the first entry that defines a name is the one the VM resolves.
+            compatJar?.let(::add)
+            version.classpathLibraries(environment)
+                .filterNot { compatJar != null && it.isSupersededByLwjgl2Compat() }
+                .forEach { add(files.library(it.path)) }
             // The client jar goes last so that a mod loader's overrides on the classpath win.
             add(files.versionJar(version.clientJarVersionId))
         }.filter(File::isFile)

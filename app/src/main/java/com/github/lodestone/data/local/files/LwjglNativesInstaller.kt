@@ -45,29 +45,45 @@ object LwjglNativesInstaller {
      */
     private val SHARED = listOf("libfreetype.so", "libopenal.so")
 
+    /** The one library of a set the LWJGL 2 layer needs a different build of. */
+    private const val OPENGL = "liblwjgl_opengl.so"
+
+    /**
+     * @param compat2 installs the OpenGL bindings the LWJGL 2 compatibility layer needs in place of
+     *   the stock ones. The two export different JNI symbol names, so a directory holding one is no
+     *   use to the other and the marker records which it is.
+     */
     fun install(
         set: LwjglNativeSet,
         source: LwjglNativesSource,
         nativeLibraryDir: File,
         target: File,
+        compat2: Boolean = false,
     ) {
         target.mkdirs()
-        installSet(set, source, target)
+        installSet(set, source, target, compat2)
         installShared(nativeLibraryDir, target)
     }
 
-    private fun installSet(set: LwjglNativeSet, source: LwjglNativesSource, target: File) {
+    private fun installSet(
+        set: LwjglNativeSet,
+        source: LwjglNativesSource,
+        target: File,
+        compat2: Boolean,
+    ) {
+        val stamp = if (compat2) "${set.version}+lwjgl2" else set.version
         val marker = File(target, MARKER)
-        if (marker.isFile && runCatching(marker::readText).getOrNull() == set.version) {
+        if (marker.isFile && runCatching(marker::readText).getOrNull() == stamp) {
             return
         }
         // Stamped only once every library has landed, so a copy interrupted halfway is redone on
         // the next launch rather than left half-applied behind a marker that claims otherwise.
         marker.delete()
         for (name in LwjglNativeSet.LIBRARIES) {
-            val opened = source.open(set, name)
+            val asset = if (compat2 && name == OPENGL) LwjglNativeSet.COMPAT2_OPENGL else name
+            val opened = source.open(set, asset)
             if (opened == null) {
-                Timber.e("This build packages no %s for LWJGL %s", name, set.version)
+                Timber.e("This build packages no %s for LWJGL %s", asset, set.version)
                 return
             }
             val destination = File(target, name)
@@ -80,8 +96,8 @@ object LwjglNativesInstaller {
             destination.setReadable(true, false)
             destination.setExecutable(true, false)
         }
-        marker.writeText(set.version)
-        Timber.i("Installed the LWJGL %s natives into %s", set.version, target)
+        marker.writeText(stamp)
+        Timber.i("Installed the LWJGL %s natives into %s", stamp, target)
     }
 
     /**

@@ -68,6 +68,36 @@ class LwjglNativesInstallerTest {
     }
 
     @Test
+    fun `the lwjgl 2 layer gets the relocated opengl bindings under the stock name`() {
+        val target = natives()
+        val apk = apkLibraries()
+        LwjglNativesInstaller.install(LwjglNativeSet.COMPAT2, source(), apk, target, compat2 = true)
+
+        // Same file name, different build: the relocated Java side still asks for `lwjgl_opengl`,
+        // and only the asset directory tells the two symbol sets apart.
+        assertEquals(
+            "3.3.3/${LwjglNativeSet.COMPAT2_OPENGL}",
+            File(target, "liblwjgl_opengl.so").readText(),
+        )
+        assertEquals("3.3.3/liblwjgl.so", File(target, "liblwjgl.so").readText())
+    }
+
+    @Test
+    fun `a directory holding the stock opengl bindings is reinstalled for the lwjgl 2 layer`() {
+        val target = natives()
+        val apk = apkLibraries()
+        LwjglNativesInstaller.install(LwjglNativeSet.COMPAT2, source(), apk, target)
+        LwjglNativesInstaller.install(LwjglNativeSet.COMPAT2, source(), apk, target, compat2 = true)
+
+        // The marker records the same set both times, so only the compat2 half of the stamp can
+        // tell the launch that the symbols in there are the wrong ones.
+        assertEquals(
+            "3.3.3/${LwjglNativeSet.COMPAT2_OPENGL}",
+            File(target, "liblwjgl_opengl.so").readText(),
+        )
+    }
+
+    @Test
     fun `an incomplete set is retried rather than recorded as installed`() {
         val target = natives()
         val apk = apkLibraries()

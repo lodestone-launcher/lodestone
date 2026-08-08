@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.data.local.files.Lwjgl2CompatInstaller
+import com.github.lodestone.data.local.files.Lwjgl2CompatSource
 import com.github.lodestone.data.local.files.LwjglNativesSource
 import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.remote.download.DownloadEngine
@@ -68,7 +70,9 @@ interface DataModule {
         files: GameFiles,
         runtimes: JavaRuntimeManager,
         lwjglNatives: LwjglNativesSource,
-    ): BuildLaunchSpecUseCase = BuildLaunchSpecUseCase(files, runtimes, lwjglNatives)
+        lwjgl2Compat: Lwjgl2CompatSource,
+    ): BuildLaunchSpecUseCase =
+        BuildLaunchSpecUseCase(files, runtimes, lwjglNatives, lwjgl2Compat)
 
     /**
      * The packaged LWJGL sets, which are assets rather than jniLibs: the installer only ever
@@ -87,6 +91,13 @@ interface DataModule {
                 runCatching { context.assets.open("${set.assetPath}/$abi/$name") }.getOrNull()
             }
         }
+
+    /** The LWJGL 2 compatibility layer, built from `app/src/lwjgl2` and packaged as one asset. */
+    @Provides
+    @SingleIn(AppScope::class)
+    fun provideLwjgl2Compat(context: Context): Lwjgl2CompatSource = Lwjgl2CompatSource {
+        runCatching { context.assets.open(Lwjgl2CompatInstaller.ASSET) }.getOrNull()
+    }
 
     @Provides
     @SingleIn(AppScope::class)
