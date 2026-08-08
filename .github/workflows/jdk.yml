@@ -144,21 +144,36 @@ jobs:
     strategy:
       matrix:
         abi: [arm64-v8a, x86_64]
+        # One set per LWJGL release the supported versions pin. The generated JNI libraries bind
+        # only to the release they came from, so 26.2's 3.4.1 cannot run on 3.3.3's natives and
+        # 1.21.4's 3.3.3 cannot run on 3.4.1's.
+        version: ["3.3.3", "3.4.1"]
+        include:
+          # FreeType and OpenAL Soft are not generated from the bindings and have no version
+          # coupling, so one build of each serves every set and it rides along with the oldest.
+          - version: "3.3.3"
+            third_party: "yes"
+          - version: "3.4.1"
+            third_party: "no"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build the LWJGL natives for ${{ matrix.abi }}
+      - name: Build the LWJGL ${{ matrix.version }} natives for ${{ matrix.abi }}
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: |
           # libffi is configured from a git checkout rather than a release tarball, so its
           # `configure` has to be generated first; ninja drives the FreeType and OpenAL builds.
           sudo apt-get update && sudo apt-get install -y autoconf automake libtool ninja-build
-          bash runtime/build-lwjgl.sh --abi "${{ matrix.abi }}" --output "${{ github.workspace }}/out"
+          bash runtime/build-lwjgl.sh \
+            --version "${{ matrix.version }}" \
+            --abi "${{ matrix.abi }}" \
+            --third-party "${{ matrix.third_party }}" \
+            --output "${{ github.workspace }}/out/${{ matrix.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lwjgl-${{ matrix.abi }}
+          name: lwjgl-${{ matrix.version }}-${{ matrix.abi }}
           path: out/**
           if-no-files-found: error
 
