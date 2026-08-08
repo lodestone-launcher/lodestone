@@ -7,17 +7,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -34,9 +40,15 @@ import com.github.lodestone.domain.model.version.VersionEntry
  * This is the first screen that actually exercises the download and install path end to end
  * against Mojang's servers.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel, modifier: Modifier = Modifier) {
+fun HomeScreen(
+    viewModel: HomeViewModel,
+    onOpenAccounts: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val account by viewModel.activeAccount.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     state.runtimePrompt?.let { prompt ->
@@ -47,7 +59,37 @@ fun HomeScreen(viewModel: HomeViewModel, modifier: Modifier = Modifier) {
         )
     }
 
-    Scaffold(modifier = modifier.fillMaxSize()) { padding ->
+    state.signInRequired?.let { reason ->
+        SignInRequiredDialog(
+            reason = reason,
+            onConfirm = {
+                viewModel.dismissSignInPrompt()
+                onOpenAccounts()
+            },
+            onDismiss = viewModel::dismissSignInPrompt,
+        )
+    }
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text("Lodestone") },
+                actions = {
+                    // The name doubles as the button: who is signed in and where to change it are
+                    // the same question.
+                    account?.let { Text(it.username, style = MaterialTheme.typography.labelLarge) }
+                    IconButton(onClick = onOpenAccounts) {
+                        Icon(
+                            imageVector = Icons.Default.AccountCircle,
+                            contentDescription = account?.let { "Accounts, signed in as ${it.username}" }
+                                ?: "Sign in",
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             ChannelFilter(
                 selected = state.channel,
@@ -139,6 +181,23 @@ private fun RuntimeDownloadDialog(
             )
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Download") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+/**
+ * Raised when Play is pressed with nobody to play as, or with an account whose access was revoked.
+ *
+ * The reason is passed through rather than written here: "Steve has to sign in to Microsoft again"
+ * and "sign in with the account that owns the game" send someone to two different places.
+ */
+@Composable
+private fun SignInRequiredDialog(reason: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sign in to play") },
+        text = { Text(reason) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Accounts") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
     )
 }

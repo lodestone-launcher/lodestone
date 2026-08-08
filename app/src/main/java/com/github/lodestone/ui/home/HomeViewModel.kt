@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import android.content.Context
 import android.content.Intent
 import com.github.lodestone.BuildConfig
+import com.github.lodestone.data.repository.AccountRepository
 import com.github.lodestone.data.repository.InstallStage
 import com.github.lodestone.data.repository.RuntimeInstaller
 import com.github.lodestone.data.repository.RuntimeStage
@@ -12,18 +13,20 @@ import com.github.lodestone.data.repository.VersionInstaller
 import com.github.lodestone.domain.model.version.LaunchEnvironment
 import com.github.lodestone.domain.model.version.VersionChannel
 import com.github.lodestone.domain.model.version.VersionEntry
-import com.github.lodestone.domain.model.account.AccountType
+import com.github.lodestone.domain.model.account.AuthenticationError
 import com.github.lodestone.domain.model.account.MinecraftAccount
 import com.github.lodestone.domain.model.launch.LaunchOptions
 import com.github.lodestone.domain.model.launch.LaunchRequest
 import com.github.lodestone.domain.usecase.BuildLaunchSpecUseCase
 import com.github.lodestone.ui.game.GameActivity
 import java.io.File
-import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -37,6 +40,8 @@ data class HomeUiState(
     val progress: Float = 0f,
     val message: String? = null,
     val runtimePrompt: RuntimePrompt? = null,
+    /** Why a launch stopped short of starting, when the reason is that nobody can play. */
+    val signInRequired: String? = null,
 ) {
     val visibleVersions: List<VersionEntry>
         get() = versions.filter { it.channel == channel }
@@ -64,10 +69,16 @@ class HomeViewModel(
     private val installer: VersionInstaller,
     private val runtimeInstaller: RuntimeInstaller,
     private val buildLaunchSpec: BuildLaunchSpecUseCase,
+    private val accounts: AccountRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    /** Shown in the app bar, so the person pressing Play can see who they are about to play as. */
+    val activeAccount: StateFlow<MinecraftAccount?> = accounts.state
+        .map { it.active }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(ACCOUNT_STOP_TIMEOUT_MILLIS), null)
 
     private var installJob: Job? = null
 
@@ -76,6 +87,7 @@ class HomeViewModel(
 
     init {
         refresh()
+        viewModelScope.launch { accounts.load() }
     }
 
     fun refresh() {
@@ -135,21 +147,12 @@ class HomeViewModel(
         }
     }
 
-    /**
-     * Resolves an installed version and hands it to the game process.
-     *
-     * The account is an offline one for now: sign-in exists but is not wired to a screen yet, and
-     * an offline account is enough to reach the main menu, which is what the runtime and graphics
-     * work actually needs to be exercised. Release builds refuse to create one.
-     */
+    /** Resolves an installed version, renews the session if needed, and starts the game process. */
     fun launch(context: Context, entry: VersionEntry) {
         viewModelScope.launch {
-            _uiState.update { it.copy(message = "Preparing ${entry.id}…") }
+            _uiState.update { it.copy(message = "Preparing ${entry.id}…", signInRequired = null) }
             runCatching { prepareAndStart(context, entry) }
-                .onFailure { failure ->
-                    Timber.e(failure, "Could not launch %s", entry.id)
-                    _uiState.update { it.copy(message = failure.message ?: "Launch failed") }
-                }
+                .onFailure { failure -> onLaunchFailure(failure, entry) }
         }
     }
 
@@ -171,10 +174,7 @@ class HomeViewModel(
             runCatching {
                 runtimeInstaller.ensureInstalled(prompt.feature) { stage -> onRuntimeStage(stage) }
                 prepareAndStart(context, prompt.entry)
-            }.onFailure { failure ->
-                Timber.e(failure, "Could not install the Java %d runtime", prompt.feature)
-                _uiState.update { it.copy(message = failure.message ?: "Runtime install failed") }
-            }
+            }.onFailure { failure -> onLaunchFailure(failure, prompt.entry) }
             _uiState.update { it.copy(installing = null, progressLabel = null) }
         }
     }
@@ -183,12 +183,25 @@ class HomeViewModel(
         _uiState.update { it.copy(runtimePrompt = null, message = null) }
     }
 
+    fun dismissSignInPrompt() {
+        _uiState.update { it.copy(signInRequired = null, message = null) }
+    }
+
     private suspend fun prepareAndStart(context: Context, entry: VersionEntry) {
+        // Before anything is resolved, because a launch nobody can play is not worth the disk read.
+        // A token inside its expiry margin is renewed here, so the game is never handed one that
+        // dies while a world is loading.
+        val account = accounts.activeForLaunch()
+        if (account == null) {
+            _uiState.update { it.copy(message = null, signInRequired = NO_ACCOUNT) }
+            return
+        }
+
         val environment = launchEnvironment()
         val version = installer.resolve(entry, environment)
         val result = buildLaunchSpec(
             version = version,
-            account = offlineAccount(),
+            account = account,
             environment = environment,
             options = LaunchOptions(verboseVmStartup = BuildConfig.DEBUG),
             nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
@@ -222,18 +235,20 @@ class HomeViewModel(
         }
     }
 
-    private fun offlineAccount(): MinecraftAccount {
-        check(BuildConfig.ALLOW_OFFLINE_ACCOUNTS) { "Offline accounts are debug-only" }
-        val name = "Player"
-        // Mirrors Mojang's scheme for offline identities so the world save directory is stable.
-        val uuid = UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray())
-        return MinecraftAccount(
-            uuid = uuid.toString().replace("-", ""),
-            username = name,
-            accessToken = "0",
-            expiresAt = Long.MAX_VALUE,
-            type = AccountType.OFFLINE,
-        )
+    /**
+     * Turns a failed launch into something to read.
+     *
+     * A revoked account is separated out because it is not a failure to retry: the message names
+     * who has to sign in again, and the prompt takes them there.
+     */
+    private fun onLaunchFailure(failure: Throwable, entry: VersionEntry) {
+        if (failure is AuthenticationError.ReauthenticationRequired) {
+            Timber.i("%s has to sign in again", failure.username)
+            _uiState.update { it.copy(message = null, signInRequired = failure.message) }
+            return
+        }
+        Timber.e(failure, "Could not launch %s", entry.id)
+        _uiState.update { it.copy(message = failure.message ?: "Launch failed") }
     }
 
     private fun onStage(stage: InstallStage) {
@@ -295,4 +310,16 @@ class HomeViewModel(
             else -> "aarch64"
         },
     )
+
+    private companion object {
+        /** Long enough to survive a rotation without re-reading the account store. */
+        const val ACCOUNT_STOP_TIMEOUT_MILLIS = 5_000L
+
+        val NO_ACCOUNT = if (BuildConfig.ALLOW_OFFLINE_ACCOUNTS) {
+            "Sign in with the Microsoft account that owns Minecraft: Java Edition, or add an " +
+                "offline account to test the runtime."
+        } else {
+            "Sign in with the Microsoft account that owns Minecraft: Java Edition to play."
+        }
+    }
 }

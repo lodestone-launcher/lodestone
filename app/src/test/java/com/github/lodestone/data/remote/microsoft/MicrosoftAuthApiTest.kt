@@ -11,6 +11,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,6 +79,16 @@ class MicrosoftAuthApiTest {
         assertNull(api().authorizationCodeFrom("https://login.live.com/oauth20_desktop.srf?code="))
         assertNull(api().authorizationCodeFrom("about:blank"))
         assertNull(api().authorizationCodeFrom(""))
+    }
+
+    @Test
+    fun `recognises the redirect even when it carries a refusal`() {
+        // Microsoft's own close button lands here. It is still the end of the flow, and still a
+        // page the WebView must not be left sitting on.
+        assertTrue(api().isRedirect("https://login.live.com/oauth20_desktop.srf?error=access_denied"))
+        assertTrue(api().isRedirect("https://login.live.com/oauth20_desktop.srf"))
+        assertFalse(api().isRedirect("https://login.live.com/oauth20_authorize.srf?client_id=x"))
+        assertFalse(api().isRedirect("https://login.live.com.example.invalid/oauth20_desktop.srf?code=stolen"))
     }
 
     @Test

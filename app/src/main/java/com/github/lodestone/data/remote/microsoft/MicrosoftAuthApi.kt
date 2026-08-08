@@ -60,21 +60,36 @@ class MicrosoftAuthApi(
     }.buildString()
 
     /**
-     * Extracts the authorisation code from a redirect the WebView was about to follow, or returns
-     * null when this is not the redirect.
+     * Whether the WebView has reached the end of the flow, whatever it ended in.
      *
-     * Scheme, host, port and path all have to match [REDIRECT_URI] exactly. A prefix or `contains`
-     * test would accept `https://login.live.com.example.invalid/oauth20_desktop.srf?code=…` and
-     * hand a live authorisation code to whoever owns that name — a single redeemable code is all an
-     * attacker needs to take over the account for as long as the refresh token lives.
+     * The redirect is the only page the WebView must never be allowed to load: it is where the
+     * result arrives, and following it would leave that result in the page's history.
      */
-    fun authorizationCodeFrom(url: String): String? {
+    fun isRedirect(url: String): Boolean = redirectParameters(url) != null
+
+    /**
+     * Extracts the authorisation code from a redirect the WebView was about to follow, or returns
+     * null when there is none — either because this is not the redirect, or because it arrived
+     * carrying a refusal instead.
+     */
+    fun authorizationCodeFrom(url: String): String? =
+        redirectParameters(url)?.get("code")?.takeIf(String::isNotBlank)
+
+    /**
+     * The query of [url] when it is [REDIRECT_URI], and null for every other page.
+     *
+     * Scheme, host, port and path all have to match exactly. A prefix or `contains` test would
+     * accept `https://login.live.com.example.invalid/oauth20_desktop.srf?code=…` and hand a live
+     * authorisation code to whoever owns that name — one redeemable code is all it takes to own
+     * the account for as long as the refresh token lives.
+     */
+    private fun redirectParameters(url: String): Parameters? {
         val candidate = runCatching { Url(url) }.getOrNull() ?: return null
         if (candidate.protocol.name != REDIRECT.protocol.name) return null
         if (!candidate.host.equals(REDIRECT.host, ignoreCase = true)) return null
         if (candidate.port != REDIRECT.port) return null
         if (candidate.encodedPath != REDIRECT.encodedPath) return null
-        return candidate.parameters["code"]?.takeIf(String::isNotBlank)
+        return candidate.parameters
     }
 
     /** Completes sign-in for a code obtained from [authorizationCodeFrom]. */
