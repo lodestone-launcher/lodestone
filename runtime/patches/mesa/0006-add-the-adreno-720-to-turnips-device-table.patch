@@ -1,5 +1,5 @@
 diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
-index 87b4190..12a5af7 100644
+index 87b4190..ff73d92 100644
 --- a/src/freedreno/common/freedreno_devices.py
 +++ b/src/freedreno/common/freedreno_devices.py
 @@ -939,6 +939,65 @@ a730_raw_magic_regs = [
@@ -68,7 +68,7 @@ index 87b4190..12a5af7 100644
  a740_magic_regs = dict(
          RB_DBG_ECO_CNTL = 0x00000000,
          RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
-@@ -1032,6 +1091,32 @@ add_gpus([
+@@ -1032,6 +1091,38 @@ add_gpus([
          raw_magic_regs = a730_raw_magic_regs,
      ))
  
@@ -80,10 +80,16 @@ index 87b4190..12a5af7 100644
 +        [a7xx_base, a7xx_gen1],
 +        # Everything but num_ccu and the magic registers matches a730: the a7xx gen1 parts share a
 +        # tiling and fiber layout, and only the shader core count and the per-GPU register tuning
-+        # actually differ. num_ccu is the one value here with no second source — a730 and a725 have
-+        # 4, a735 has 3, and 2 is what the blob traces imply for this smaller part. GMEM size is not
-+        # guessed at all; KGSL reports it.
-+        num_ccu = 2,
++        # actually differ.
++        #
++        # num_ccu has no second source to read it off, so it was bracketed on the device instead.
++        # The value has to match the hardware's real CCU count, because it is what places the colour
++        # and depth caches in GMEM: at 2 the third CCU writes over where the driver put the colour
++        # cache, and anything drawn after the world came out holding stale scene tiles — the HUD
++        # slots showed fragments of terrain. At 4 the depth cache alone wants num_ccu * 256 KiB,
++        # which does not fit the 1 MiB of GMEM the kernel reports, and Zink faults before a frame
++        # lands. 3 is the only value that both fits and renders correctly, and it is what a735 uses.
++        num_ccu = 3,
 +        tile_align_w = 64,
 +        tile_align_h = 32,
 +        tile_max_w = 1024,
