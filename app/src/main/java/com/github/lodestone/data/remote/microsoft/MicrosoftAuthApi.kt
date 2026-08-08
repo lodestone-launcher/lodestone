@@ -16,6 +16,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
+import io.ktor.http.Url
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.http.Parameters
@@ -46,8 +47,8 @@ class MicrosoftAuthApi(
 ) {
 
     /**
-     * The URL to load in a WebView to begin sign-in. When the view navigates to a URL starting with
-     * [REDIRECT_URI], the `code` query parameter is the authorisation code for [signIn].
+     * The URL to load in a WebView to begin sign-in. When the view navigates to [REDIRECT_URI], the
+     * `code` query parameter is the authorisation code for [signIn].
      */
     fun authorizationUrl(): String = URLBuilder(AUTHORIZE_URL).apply {
         parameters.append("client_id", clientId)
@@ -58,12 +59,22 @@ class MicrosoftAuthApi(
         parameters.append("prompt", "select_account")
     }.buildString()
 
-    /** Extracts the authorisation code from a redirect the WebView was about to follow. */
+    /**
+     * Extracts the authorisation code from a redirect the WebView was about to follow, or returns
+     * null when this is not the redirect.
+     *
+     * Scheme, host, port and path all have to match [REDIRECT_URI] exactly. A prefix or `contains`
+     * test would accept `https://login.live.com.example.invalid/oauth20_desktop.srf?code=…` and
+     * hand a live authorisation code to whoever owns that name — a single redeemable code is all an
+     * attacker needs to take over the account for as long as the refresh token lives.
+     */
     fun authorizationCodeFrom(url: String): String? {
-        if (!url.startsWith(REDIRECT_URI)) {
-            return null
-        }
-        return URLBuilder(url).parameters["code"]
+        val candidate = runCatching { Url(url) }.getOrNull() ?: return null
+        if (candidate.protocol.name != REDIRECT.protocol.name) return null
+        if (!candidate.host.equals(REDIRECT.host, ignoreCase = true)) return null
+        if (candidate.port != REDIRECT.port) return null
+        if (candidate.encodedPath != REDIRECT.encodedPath) return null
+        return candidate.parameters["code"]?.takeIf(String::isNotBlank)
     }
 
     /** Completes sign-in for a code obtained from [authorizationCodeFrom]. */
@@ -129,7 +140,11 @@ class MicrosoftAuthApi(
                 json.decodeFromString(MicrosoftErrorResponse.serializer(), body)
             }.getOrNull()
             // `invalid_grant` on a refresh means the user revoked access or changed their password;
-            // there is nothing to retry, the account has to sign in again.
+            // there is nothing to retry, the account has to sign in again. Named separately from
+            // the rest so the UI can say that instead of showing a failure that looks transient.
+            if (error?.error == INVALID_GRANT) {
+                throw AuthenticationError.ReauthenticationRequired()
+            }
             throw AuthenticationError.MicrosoftFailed(
                 error?.errorDescription ?: error?.error ?: "Microsoft sign-in failed (${response.status.value})",
             )
@@ -292,6 +307,12 @@ class MicrosoftAuthApi(
          * moment it tries to navigate there, and the `code` parameter is read off the URL.
          */
         const val REDIRECT_URI = "https://login.live.com/oauth20_desktop.srf"
+
+        /** Parsed once, because [authorizationCodeFrom] runs for every URL the WebView visits. */
+        private val REDIRECT = Url(REDIRECT_URI)
+
+        /** Microsoft's OAuth code for a refresh token that will never be accepted again. */
+        private const val INVALID_GRANT = "invalid_grant"
 
         const val AUTHORIZE_URL = "https://login.live.com/oauth20_authorize.srf"
         const val TOKEN_URL = "https://login.live.com/oauth20_token.srf"

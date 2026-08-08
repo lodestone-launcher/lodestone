@@ -73,5 +73,18 @@ sealed class AuthenticationError(message: String, cause: Throwable? = null) :
     /** Signed in successfully, but the account does not own Minecraft: Java Edition. */
     class NotEntitled : AuthenticationError("This account does not own Minecraft: Java Edition")
 
+    /**
+     * The refresh token is no longer accepted, which Microsoft reports as `invalid_grant`. It means
+     * the user revoked the launcher's access or changed their password, so there is nothing to
+     * retry — only this account signing in again.
+     */
+    class ReauthenticationRequired(val username: String? = null) : AuthenticationError(
+        if (username == null) {
+            "This account has to sign in to Microsoft again"
+        } else {
+            "$username has to sign in to Microsoft again"
+        },
+    )
+
     class Network(cause: Throwable) : AuthenticationError("Could not reach the sign-in service", cause)
 }
