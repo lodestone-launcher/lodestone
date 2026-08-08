@@ -1,5 +1,7 @@
 package com.github.lodestone.data.remote.download
 
+import com.github.lodestone.common.io.Checksum
+import com.github.lodestone.common.io.HashAlgorithm
 import com.github.lodestone.common.io.Hashing
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -27,11 +29,11 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
-/** One file to fetch. [size] and [sha1] are whatever the manifest happened to publish. */
+/** One file to fetch. [size] and [checksum] are whatever the manifest happened to publish. */
 data class DownloadRequest(
     val url: String,
     val destination: File,
-    val sha1: String? = null,
+    val checksum: Checksum? = null,
     val size: Long? = null,
     /** Shown in the UI while this file is in flight. */
     val label: String = destination.name,
@@ -175,7 +177,8 @@ class DownloadEngine(
             // Resume where a previous run stopped. The digest is rebuilt over the existing bytes so
             // the final checksum still covers the whole file.
             val existingBytes = if (part.isFile) part.length() else 0L
-            val resumeDigest = Hashing.sha1Digest()
+            val algorithm = request.checksum?.algorithm ?: HashAlgorithm.SHA1
+            val resumeDigest = Hashing.digest(algorithm)
             if (existingBytes > 0) {
                 part.inputStream().use { stream ->
                     val buffer = ByteArray(BUFFER_BYTES)
@@ -204,7 +207,7 @@ class DownloadEngine(
                     onBytes(-existingBytes)
                 }
 
-                val digest = if (resumed) resumeDigest else Hashing.sha1Digest()
+                val digest = if (resumed) resumeDigest else Hashing.digest(algorithm)
                 var written = if (resumed) existingBytes else 0L
 
                 val channel = response.bodyAsChannel()
@@ -224,11 +227,12 @@ class DownloadEngine(
                     }
                 }
 
-                val actualSha1 = Hashing.toHex(digest.digest())
-                if (request.sha1 != null && !Hashing.matches(request.sha1, actualSha1)) {
+                val actual = Hashing.toHex(digest.digest())
+                if (request.checksum != null && !Hashing.matches(request.checksum, actual)) {
                     part.delete()
                     throw DownloadException(
-                        "Checksum mismatch for ${request.url}: expected ${request.sha1}, got $actualSha1",
+                        "Checksum mismatch for ${request.url}: " +
+                            "expected ${request.checksum.value}, got $actual",
                     )
                 }
                 if (request.size != null && written != request.size) {
@@ -260,8 +264,9 @@ class DownloadEngine(
         // With no size to compare against, the checksum is the only signal available, so it is
         // worth paying for even in the fast mode.
         val needsChecksum = verification == VerificationMode.CHECKSUM || request.size == null
-        if (needsChecksum && request.sha1 != null) {
-            val matches = Hashing.matches(request.sha1, Hashing.sha1(destination))
+        if (needsChecksum && request.checksum != null) {
+            val actual = Hashing.hash(destination, request.checksum.algorithm)
+            val matches = Hashing.matches(request.checksum, actual)
             if (!matches) {
                 Timber.w("Re-downloading %s: checksum mismatch", destination.name)
             }

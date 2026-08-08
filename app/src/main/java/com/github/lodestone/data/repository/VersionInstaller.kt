@@ -1,6 +1,7 @@
 package com.github.lodestone.data.repository
 
 import com.github.lodestone.common.LodestoneJson
+import com.github.lodestone.common.io.Checksum
 import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.data.local.files.NativesExtractor
 import com.github.lodestone.data.remote.download.DownloadEngine
@@ -131,7 +132,7 @@ class VersionInstaller(
                 // The jar is stored under the version that actually published it, so a mod-loader
                 // install shares the vanilla jar instead of downloading its own copy.
                 destination = files.versionJar(version.clientJarVersionId),
-                sha1 = jar.sha1,
+                checksum = Checksum.sha1(jar.sha1),
                 size = jar.size,
                 label = "${version.clientJarVersionId}.jar",
             ),
@@ -148,7 +149,7 @@ class VersionInstaller(
                 DownloadRequest(
                     url = url,
                     destination = files.library(entry.path),
-                    sha1 = entry.artifact.sha1,
+                    checksum = Checksum.sha1(entry.artifact.sha1),
                     size = entry.artifact.size,
                     label = entry.library.name,
                 )
@@ -165,7 +166,7 @@ class VersionInstaller(
                     DownloadRequest(
                         url = url,
                         destination = destination,
-                        sha1 = reference.sha1,
+                        checksum = Checksum.sha1(reference.sha1),
                         size = reference.size,
                         label = "asset index ${reference.id}",
                     ),
@@ -187,7 +188,7 @@ class VersionInstaller(
                 DownloadRequest(
                     url = asset.url,
                     destination = files.assetObject(asset.objectPath),
-                    sha1 = asset.hash,
+                    checksum = Checksum.sha1(asset.hash),
                     size = asset.size,
                     label = "assets",
                 )
@@ -201,7 +202,7 @@ class VersionInstaller(
             DownloadRequest(
                 url = url,
                 destination = File(files.logConfigs, logging.file.id),
-                sha1 = logging.file.sha1,
+                checksum = Checksum.sha1(logging.file.sha1),
                 size = logging.file.size,
                 label = logging.file.id,
             ),
