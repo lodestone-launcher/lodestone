@@ -209,6 +209,18 @@ Two things make 8 structurally different from 17/21/25:
   `R_AARCH64_JUMP_SLOT`, which on glibc would at worst be a lazy binding that never happens. bionic
   has no lazy PLT binding, so it is resolved at `dlopen` and the whole VM fails to open. Adding the
   include to `bitset.cpp` is enough; `RTLD_LAZY` is not a workaround.
+- **`0015-guard-the-64-bit-shift-in-replicate.patch`** — the second clang-versus-gcc gap, and the
+  reason the runtime that fixed `0014` still could not start a VM. `replicate()` shifts an
+  accumulator left by `nbits`, which `expandLogicalImmediate` calls once with `nbits == 64`.
+  Shifting a 64-bit value by 64 is undefined; gcc emits the `lsl` anyway and AArch64 masks the
+  amount to zero, so the value survives. clang at `-O3` — HotSpot's own optimisation level for this
+  file — inlines `replicate`, unrolls the loop until `nbits` is the constant 64, folds the
+  undefined shift to poison and constant-folds the result to zero. Every one of the 5334 entries in
+  the logical-immediate table then reads zero, `encoding_for_logical_immediate` finds nothing, and
+  `StubGenerator::generate_call_stub` cannot encode `and sp, rscratch1, #-16` — the VM dies on
+  `guarantee(val < (1U << nbits)) failed: Field too big for insn` in `StubRoutines::initialize1()`,
+  before a single bytecode runs. JDK 11 fixed this upstream with the same guard; 8u never got the
+  backport, and it only bites a clang build.
 
 ### What 8 does *not* need
 

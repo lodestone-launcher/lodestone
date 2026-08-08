@@ -134,7 +134,10 @@ class BuildLaunchSpecUseCase(
             // does not redirect and which does not exist on Android. Nothing reads these counters
             // here — they exist for jstat and jcmd, neither of which can attach on a phone.
             add("-XX:-UsePerfData")
-            if (options.verboseVmStartup) {
+            // Unified logging arrived in Java 9. On 8 the option is not merely ignored: HotSpot
+            // rejects it outright, JNI_CreateJavaVM returns JNI_ERR, and every pre-1.13 version
+            // fails to launch in a debug build for a reason that has nothing to do with them.
+            if (options.verboseVmStartup && feature >= FIRST_UNIFIED_LOGGING_FEATURE) {
                 // HotSpot's unified logging, aimed at stderr so the stdio mirror captures it. A VM
                 // that dies during initialisation often does so without printing anything on its
                 // own, and this is the only way to see how far it got.
@@ -167,5 +170,10 @@ class BuildLaunchSpecUseCase(
                 environment = runtimes.environmentFor(feature, nativesDirectory),
             ),
         )
+    }
+
+    private companion object {
+        /** The first feature release whose HotSpot understands `-Xlog`. */
+        const val FIRST_UNIFIED_LOGGING_FEATURE = 9
     }
 }
