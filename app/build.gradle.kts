@@ -162,6 +162,8 @@ dependencies {
     testImplementation(libs.ktor.client.mock)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // The device tests build a repository, which needs an auth API it will never call.
+    androidTestImplementation(libs.ktor.client.mock)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
