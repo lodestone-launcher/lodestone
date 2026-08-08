@@ -137,13 +137,13 @@ These have not been reproduced yet, and some may prove to be non-issues like the
 
 ## JDK 8 — a different patch set entirely
 
-`jdk8/` shares none of its thirteen patches with the other three, and not because the same problems
+`jdk8/` shares none of its fourteen patches with the other three, and not because the same problems
 were spelled differently: only two of the six recur at all. jdk8u predates both the unified build
 system and the musl portability work, so the modern set's `dlinfo`, `netinet/in.h` and
 `--disable-new-dtags` problems simply are not in this source, and a different set is.
 
 Verified against `openjdk/jdk8u` at `aa3f9dea`, which is what the published tarball was built from.
-All thirteen apply at zero offset and zero fuzz.
+All fourteen apply at zero offset and zero fuzz.
 
 Two things make 8 structurally different from 17/21/25:
 
@@ -198,6 +198,17 @@ Two things make 8 structurally different from 17/21/25:
 - **`0013-headless-jawt.patch`** — `JAWT_GetAWT` only returns "no AWT here" when `JAVASE_EMBEDDED`
   *and* `HEADLESS` are set, so any other headless build links `libjawt` against X11 entry points
   that are not there. Headless alone is the condition that matters.
+- **`0014-instantiate-arrayallocator-free.patch`** — the one patch here that closes a
+  clang-versus-gcc gap rather than a bionic one, and the reason the first published Java 8 runtime
+  could not be loaded at all. `bitset.cpp` holds a `BitMap` by value but includes only
+  `allocation.hpp`, so `~BitSet` compiles a call to `ArrayAllocator<bm_word_t, mtInternal>::free()`
+  it has no definition for. Every translation unit that *does* include `allocation.inline.hpp`
+  inlines the body at each call, and clang then drops the unreferenced `linkonce_odr` copy where
+  gcc keeps it — so with gcc some object happens to carry the definition and with clang no object
+  does. Nothing failed: shared libraries may leave symbols undefined, and the reference was an
+  `R_AARCH64_JUMP_SLOT`, which on glibc would at worst be a lazy binding that never happens. bionic
+  has no lazy PLT binding, so it is resolved at `dlopen` and the whole VM fails to open. Adding the
+  include to `bitset.cpp` is enough; `RTLD_LAZY` is not a workaround.
 
 ### What 8 does *not* need
 

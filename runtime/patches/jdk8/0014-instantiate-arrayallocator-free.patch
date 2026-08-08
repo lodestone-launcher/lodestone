@@ -1,0 +1,19 @@
+diff --git a/hotspot/src/share/vm/jfr/leakprofiler/chains/bitset.cpp b/hotspot/src/share/vm/jfr/leakprofiler/chains/bitset.cpp
+index a2dd1649..68992683 100644
+--- a/hotspot/src/share/vm/jfr/leakprofiler/chains/bitset.cpp
++++ b/hotspot/src/share/vm/jfr/leakprofiler/chains/bitset.cpp
+@@ -24,6 +24,14 @@
+ #include "precompiled.hpp"
+ #include "jfr/leakprofiler/chains/bitset.hpp"
+ #include "jfr/recorder/storage/jfrVirtualMemory.hpp"
++// BitSet holds a BitMap by value, so ~BitSet instantiates ~BitMap and through it
++// ArrayAllocator<bm_word_t, mtInternal>::free(), whose only definition lives in the include
++// below. Without it clang emits a call to a symbol this translation unit cannot define, and
++// no other one defines it either: every translation unit that does see the definition inlines
++// the body, after which clang drops the now-unreferenced linkonce_odr copy that GCC keeps.
++// The link still succeeds, because a shared library may leave symbols undefined, so the
++// missing instantiation only surfaces as a dlopen failure of libjvm.so on the device.
++#include "memory/allocation.inline.hpp"
+ #include "memory/memRegion.hpp"
+ 
+ BitSet::BitSet(const MemRegion& covered_region) :

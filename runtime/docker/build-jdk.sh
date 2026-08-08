@@ -242,6 +242,12 @@ IMAGE_DIR="${BUILD_DIR}/images/jdk"
 [[ -d "${IMAGE_DIR}" ]] || IMAGE_DIR="${BUILD_DIR}/images/j2sdk-image"
 [[ -d "${IMAGE_DIR}" ]] || { echo "No image produced under ${BUILD_DIR}/images" >&2; exit 1; }
 
+# Deliberately before packaging, so a runtime that cannot load produces no tarball to publish. A
+# shared library is allowed to leave symbols undefined and the linker says nothing about the ones
+# no library will ever define, which is how a libjvm.so missing a template instantiation shipped
+# and failed at `dlopen` on every device.
+"$(dirname "$0")/audit-image.sh" --image "${IMAGE_DIR}" --abi "${ABI}" --api "${ANDROID_API}"
+
 mkdir -p "${OUTPUT}"
 ARCHIVE="${OUTPUT}/lodestone-jre${FEATURE}-${ABI}.tar.gz"
 
