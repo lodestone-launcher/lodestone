@@ -1,6 +1,7 @@
 package com.github.lodestone.runtime
 
 import android.view.Surface
+import com.github.lodestone.domain.model.launch.RendererChoice
 
 /**
  * The input and windowing side of the shim that stands in for GLFW.
@@ -40,7 +41,11 @@ object GlfwBridge {
     }
 
     /**
-     * Opens the desktop-GL translation layer named by [path].
+     * Brings up the first of [candidates] that works, and returns it — or null if none did.
+     *
+     * Being packaged is not the same as working: Zink loads perfectly well on a device whose Vulkan
+     * driver it cannot drive and only says so when its EGL fails to initialise, so each candidate is
+     * taken as far as a live EGL context before it is believed.
      *
      * Call this before the VM starts and never from the render thread. gl4es probes the driver from
      * an ELF constructor and leaves no context current on whichever thread triggered the load, so
@@ -48,9 +53,14 @@ object GlfwBridge {
      * game then dies building its first framebuffer. Opened here, LWJGL's own `dlopen` finds the
      * library already loaded and the constructor does not run again.
      */
-    fun loadTranslationLayer(path: String, eglLibrary: String?): Boolean {
+    fun selectRenderer(candidates: List<RendererChoice>): RendererChoice? {
         ensureLoaded()
-        return nativeLoadTranslationLayer(path, eglLibrary)
+        val chosen = nativeSelectRenderer(
+            candidates.map { it.id }.toTypedArray(),
+            candidates.map { it.layerPath }.toTypedArray(),
+            candidates.map { it.eglLibraryPath.orEmpty() }.toTypedArray(),
+        )
+        return candidates.getOrNull(chosen)
     }
 
     /**
@@ -135,7 +145,11 @@ object GlfwBridge {
     }
 
     @JvmStatic
-    private external fun nativeLoadTranslationLayer(path: String, eglLibrary: String?): Boolean
+    private external fun nativeSelectRenderer(
+        ids: Array<String>,
+        layerPaths: Array<String>,
+        eglLibraries: Array<String>,
+    ): Int
 
     @JvmStatic
     private external fun nativeSetSurface(surface: Surface?, width: Int, height: Int)

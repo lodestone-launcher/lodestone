@@ -87,9 +87,25 @@ class GameActivity : ComponentActivity() {
         JvmBridge.setEnv("LODESTONE_STDIO_LOG", File(filesDir, "jvm_stdio.log").absolutePath)
         JvmBridge.startStdioPump { line -> Timber.tag("Minecraft").i(line) }
         request.environment.forEach { (key, value) -> JvmBridge.setEnv(key, value) }
-        request.translationLayerPath?.let { path ->
-            val loaded = GlfwBridge.loadTranslationLayer(path, request.eglLibraryPath)
-            Timber.i("Translation layer %s loaded: %b", path, loaded)
+
+        // Settled here rather than when the spec was built, because whether a renderer works is only
+        // answered by bringing its EGL up on this device's driver — and that has to happen in this
+        // process, before the VM it will serve exists.
+        val renderer = GlfwBridge.selectRenderer(request.renderers)
+        if (renderer == null && request.renderers.isNotEmpty()) {
+            Timber.e(
+                "No renderer came up; tried %s",
+                request.renderers.joinToString { it.id },
+            )
+        } else if (renderer != null) {
+            Timber.i("Rendering through %s", renderer.id)
+        }
+
+        val jvmArgs = buildList {
+            addAll(request.jvmArgs)
+            // The same path the shim already opened, so LWJGL's own dlopen finds the library loaded
+            // rather than running its constructors a second time on the render thread.
+            renderer?.let { add("-Dorg.lwjgl.opengl.libname=${it.layerPath}") }
         }
 
         Timber.i("Launching %s via %s", request.versionId, request.libjvmPath)
@@ -97,7 +113,7 @@ class GameActivity : ComponentActivity() {
             val status = JvmBridge.launch(
                 libjvm = File(request.libjvmPath),
                 workingDirectory = File(request.gameDirectory),
-                jvmArgs = request.jvmArgs,
+                jvmArgs = jvmArgs,
                 mainClass = request.mainClass,
                 gameArgs = request.gameArgs,
             )

@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "common/log.h"
 
@@ -14,9 +15,41 @@ namespace {
 
 std::mutex g_layerMutex;
 void* g_layer = nullptr;
-bool g_layerOpened = false;
-std::string g_eglLibrary = "libEGL.so";
-bool g_desktopGl = false;
+bool g_selected = false;
+
+/**
+ * Puts the environment a candidate reads into place before anything opens it.
+ *
+ * Both drivers work this out once, as they come up, so nothing here can be deferred. Setting them
+ * per candidate rather than baking them in at build time keeps one binary working across vendors.
+ */
+void applyEnvironment(bool desktopGl) {
+    if (desktopGl) {
+        // Zink is the only Gallium driver built, but the loader still probes for a hardware driver
+        // by name first and would find none.
+        setenv("GALLIUM_DRIVER", "zink", 1);
+        setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+        // Zink advertises whatever the Vulkan driver underneath can support, which it works out
+        // lazily; the overrides stop Mesa capping the profile below what Minecraft asks for.
+        setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 1);
+        setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 1);
+        setenv("GALLIUM_THREAD", "0", 1);
+        // Android's Vulkan loader only offers the vendor driver, and Qualcomm's exposes no
+        // VK_EXT_external_memory_dma_buf. Zink needs it to render into the window's gralloc buffer:
+        // without it every import fails, the game draws into an off-screen buffer of Mesa's own and
+        // the surface is presented untouched — a black screen. Turnip supports it, so ship it and
+        // point Zink at it, leaving the loader's default for devices we have no driver for.
+        setenv("ZINK_VULKAN_LIBRARY", "libvulkan_freedreno.so", 1);
+        return;
+    }
+
+    // gl4es reads these to find the drivers it forwards to.
+    setenv("LIBGL_GLES", "libGLESv2.so", 1);
+    setenv("LIBGL_EGL", "libEGL.so", 1);
+    // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
+    // its shader conversion path is what matters.
+    setenv("LIBGL_NOBANNER", "1", 1);
+}
 
 } // namespace
 
@@ -25,66 +58,51 @@ WindowState& state() {
     return instance;
 }
 
-void* loadTranslationLayer(const char* path, const char* eglLibrary) {
+int selectRenderer(const std::vector<RendererCandidate>& candidates) {
     std::lock_guard<std::mutex> lock(g_layerMutex);
-    if (g_layerOpened) {
-        return g_layer;
+    if (g_selected) {
+        return -1;
     }
-    g_layerOpened = true;
+    g_selected = true;
 
-    if (eglLibrary != nullptr && *eglLibrary != '\0') {
-        g_eglLibrary = eglLibrary;
-        g_desktopGl = true;
-        // Mesa reads these while the driver comes up, so they have to be set before anything opens
-        // it. Zink is the only Gallium driver built, but the loader still probes for a hardware
-        // driver by name first and would find none.
-        setenv("GALLIUM_DRIVER", "zink", 0);
-        setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 0);
-        // Zink advertises whatever the Vulkan driver underneath can support, which it works out
-        // lazily; the overrides stop Mesa capping the profile below what Minecraft asks for.
-        setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 0);
-        setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 0);
-        setenv("GALLIUM_THREAD", "0", 0);
-        // Android's Vulkan loader only offers the vendor driver, and Qualcomm's exposes no
-        // VK_EXT_external_memory_dma_buf. Zink needs it to render into the window's gralloc buffer:
-        // without it every import fails, the game draws into an off-screen buffer of Mesa's own and
-        // the surface is presented untouched — a black screen. Turnip supports it, so ship it and
-        // point Zink at it, leaving the loader's default for devices we have no driver for.
-        setenv("ZINK_VULKAN_LIBRARY", "libvulkan_freedreno.so", 0);
-    } else {
-        // gl4es reads these to find the drivers it forwards to. Setting them here rather than
-        // baking them in at build time keeps one binary working across vendors, and they have to be
-        // in the environment before the constructor runs.
-        setenv("LIBGL_GLES", "libGLESv2.so", 0);
-        setenv("LIBGL_EGL", "libEGL.so", 0);
-        // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
-        // its shader conversion path is what matters.
-        setenv("LIBGL_NOBANNER", "1", 0);
+    if (candidates.empty()) {
+        initialiseEgl(nullptr, false);
+        return -1;
     }
 
-    // RTLD_GLOBAL so that LWJGL's own `dlsym(RTLD_DEFAULT, "glFoo")` lookups also land here.
-    g_layer = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-    if (g_layer == nullptr) {
-        LOGE("translation layer %s not available: %s", path, dlerror());
-    } else {
-        LOGI("translation layer %s loaded", path);
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        const RendererCandidate& candidate = candidates[index];
+        const bool desktopGl = !candidate.eglLibrary.empty();
+        applyEnvironment(desktopGl);
+
+        if (!initialiseEgl(candidate.eglLibrary.c_str(), desktopGl)) {
+            LOGE("renderer %s did not come up; trying the next", candidate.id.c_str());
+            shutdownEgl();
+            continue;
+        }
+
+        // Only now, because a layer that has been dlopened cannot be taken back out of the process:
+        // its constructors have run, and with RTLD_GLOBAL its `glFoo` symbols would answer lookups
+        // meant for whichever renderer is settled on instead.
+        g_layer = dlopen(candidate.layerPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        if (g_layer == nullptr) {
+            LOGE("renderer %s has no layer at %s: %s", candidate.id.c_str(),
+                 candidate.layerPath.c_str(), dlerror());
+            shutdownEgl();
+            continue;
+        }
+
+        LOGI("renderer %s selected (%s)", candidate.id.c_str(), candidate.layerPath.c_str());
+        return static_cast<int>(index);
     }
-    return g_layer;
+
+    LOGE("no renderer came up out of %zu tried", candidates.size());
+    return -1;
 }
 
 void* translationLayer() {
     std::lock_guard<std::mutex> lock(g_layerMutex);
     return g_layer;
-}
-
-const char* eglLibrary() {
-    std::lock_guard<std::mutex> lock(g_layerMutex);
-    return g_eglLibrary.c_str();
-}
-
-bool eglServesDesktopGl() {
-    std::lock_guard<std::mutex> lock(g_layerMutex);
-    return g_desktopGl;
 }
 
 void postEvent(const Event& event) {
@@ -122,20 +140,32 @@ void recordMouseButton(int button, int action) {
 
 extern "C" {
 
-JNIEXPORT jboolean JNICALL
-Java_com_github_lodestone_runtime_GlfwBridge_nativeLoadTranslationLayer(
-        JNIEnv* env, jclass, jstring path, jstring eglLibrary) {
-    const char* pathChars = env->GetStringUTFChars(path, nullptr);
-    const char* eglChars =
-            eglLibrary != nullptr ? env->GetStringUTFChars(eglLibrary, nullptr) : nullptr;
+JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSelectRenderer(
+        JNIEnv* env, jclass, jobjectArray ids, jobjectArray layerPaths,
+        jobjectArray eglLibraries) {
+    // Copied out of the JVM up front, because bringing a renderer up runs driver code that can take
+    // its time, and holding pinned string bodies across that is what `GetStringUTFChars` asks not
+    // to be done.
+    const auto read = [env](jobjectArray array, jsize index) {
+        auto value = static_cast<jstring>(env->GetObjectArrayElement(array, index));
+        if (value == nullptr) {
+            return std::string();
+        }
+        const char* chars = env->GetStringUTFChars(value, nullptr);
+        std::string copy = chars != nullptr ? chars : "";
+        env->ReleaseStringUTFChars(value, chars);
+        env->DeleteLocalRef(value);
+        return copy;
+    };
 
-    void* handle = lodestone::glfw::loadTranslationLayer(pathChars, eglChars);
-
-    if (eglChars != nullptr) {
-        env->ReleaseStringUTFChars(eglLibrary, eglChars);
+    std::vector<lodestone::glfw::RendererCandidate> candidates;
+    const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
+    candidates.reserve(static_cast<size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+        candidates.push_back({read(ids, index), read(layerPaths, index), read(eglLibraries, index)});
     }
-    env->ReleaseStringUTFChars(path, pathChars);
-    return handle != nullptr ? JNI_TRUE : JNI_FALSE;
+
+    return lodestone::glfw::selectRenderer(candidates);
 }
 
 JNIEXPORT void JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSetSurface(

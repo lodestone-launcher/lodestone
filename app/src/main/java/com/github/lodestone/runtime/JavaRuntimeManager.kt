@@ -2,6 +2,7 @@ package com.github.lodestone.runtime
 
 import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.domain.model.launch.Renderer
+import com.github.lodestone.domain.model.launch.RendererCandidate
 import com.github.lodestone.domain.model.version.JavaVersionRequirement
 import timber.log.Timber
 import java.io.File
@@ -117,16 +118,15 @@ class JavaRuntimeManager(private val files: GameFiles) {
     fun lwjglProperties(
         nativesDirectory: File,
         shimDirectory: File,
-        translationLayer: File?,
     ): List<String> = buildList {
         add("-Dorg.lwjgl.librarypath=${nativesDirectory.absolutePath}")
         // Named where the APK unpacked them, which is where the Activity loaded the GLFW shim from.
         // The linker treats two paths to the same library as two libraries, and the shim's window
         // state has to be the one the Activity is feeding the surface into.
         add("-Dorg.lwjgl.glfw.libname=${File(shimDirectory, "liblodestone_glfw.so").absolutePath}")
-        // The same path the Activity already opened, so LWJGL's dlopen finds the library loaded
-        // rather than running its constructors a second time on the render thread.
-        translationLayer?.let { add("-Dorg.lwjgl.opengl.libname=${it.absolutePath}") }
+        // `org.lwjgl.opengl.libname` is deliberately not set here. Which translation layer serves
+        // the game is only decided in the game process, once one of them has actually come up, so
+        // the Activity appends it for whichever won.
         // jemalloc is not cross-compiled: LWJGL falls back to the platform allocator, and bionic's
         // is a scudo/jemalloc hybrid already.
         add("-Dorg.lwjgl.system.allocator=system")
@@ -135,19 +135,27 @@ class JavaRuntimeManager(private val files: GameFiles) {
     }
 
     /**
-     * The translation layer [renderer] asks for, taking the first one actually packaged.
+     * The renderers [renderer] asks for that are actually packaged, best first.
      *
      * Resolved against the APK's native library directory rather than the version's natives, so
-     * that adding Zink's libraries to the build is enough to switch to it.
+     * that adding Zink's libraries to the build is enough to make it selectable. Being packaged is
+     * only the first hurdle: whether a renderer *works* is settled later, when the shim tries to
+     * bring its EGL up on this device's driver.
      */
-    fun translationLayer(shimDirectory: File, renderer: Renderer): File? =
-        renderer.libraryNames.map { File(shimDirectory, it) }.firstOrNull(File::isFile)
-
-    /** The EGL [translationLayer] has to be driven through, or null for Android's. */
-    fun eglLibrary(shimDirectory: File, renderer: Renderer, layer: File?): File? =
-        layer?.let { renderer.eglLibraryFor(it.name) }
-            ?.let { File(shimDirectory, it) }
-            ?.takeIf(File::isFile)
+    fun rendererCandidates(shimDirectory: File, renderer: Renderer): List<RendererCandidate> =
+        renderer.chain.mapNotNull { candidate ->
+            val layer = candidate.libraryName?.let { File(shimDirectory, it) } ?: return@mapNotNull null
+            if (!layer.isFile) {
+                return@mapNotNull null
+            }
+            RendererCandidate(
+                renderer = candidate,
+                layer = layer,
+                eglLibrary = candidate.eglLibraryName
+                    ?.let { File(shimDirectory, it) }
+                    ?.takeIf(File::isFile),
+            )
+        }
 
     private fun abiDirectory(): String =
         when (val abi = android.os.Build.SUPPORTED_ABIS?.firstOrNull()) {

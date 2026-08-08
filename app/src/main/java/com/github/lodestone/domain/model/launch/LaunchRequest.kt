@@ -11,6 +11,15 @@ import java.io.File
  * here is a plain string: an Intent extra would work for the small fields, but the classpath alone
  * routinely exceeds the Binder transaction limit, so the whole request goes through a file instead.
  */
+/** A [RendererCandidate] as it crosses the process boundary. */
+@Serializable
+data class RendererChoice(
+    /** The [Renderer]'s id, carried so the log names what was tried rather than a bare path. */
+    val id: String,
+    val layerPath: String,
+    val eglLibraryPath: String? = null,
+)
+
 @Serializable
 data class LaunchRequest(
     val versionId: String,
@@ -20,10 +29,12 @@ data class LaunchRequest(
     val libjvmPath: String,
     /** Becomes the process working directory, which is what the game resolves relative paths on. */
     val gameDirectory: String,
-    /** Opened by the game Activity before the VM starts; null when there is no layer to open. */
-    val translationLayerPath: String? = null,
-    /** The EGL the layer is driven through; null for Android's. */
-    val eglLibraryPath: String? = null,
+    /**
+     * The renderers the game Activity tries, best first, before the VM starts.
+     *
+     * Empty when there is no layer to open at all.
+     */
+    val renderers: List<RendererChoice> = emptyList(),
     val environment: Map<String, String>,
 ) {
     fun writeTo(file: File) {
@@ -39,8 +50,13 @@ data class LaunchRequest(
             gameArgs = spec.gameArgs,
             libjvmPath = spec.libjvm.absolutePath,
             gameDirectory = spec.gameDirectory.absolutePath,
-            translationLayerPath = spec.translationLayer?.absolutePath,
-            eglLibraryPath = spec.eglLibrary?.absolutePath,
+            renderers = spec.renderers.map { candidate ->
+                RendererChoice(
+                    id = candidate.renderer.id,
+                    layerPath = candidate.layer.absolutePath,
+                    eglLibraryPath = candidate.eglLibrary?.absolutePath,
+                )
+            },
             environment = spec.environment,
         )
 

@@ -55,17 +55,33 @@ struct EglApi {
 };
 
 EglApi egl;
+void* g_eglHandle = nullptr;
 
+/**
+ * Points [egl] at [library], or at the EGL this shim is linked against when it is null or empty.
+ *
+ * Android's EGL is deliberately taken from the link rather than reopened by name. Mesa's copy keeps
+ * the SONAME `libEGL.so`, so once it is in the process a `dlopen("libEGL.so")` can be answered with
+ * it instead — which is exactly the wrong answer for the gl4es candidate the chain falls back to.
+ */
 bool loadEgl(const char* library) {
-    void* handle = dlopen(library, RTLD_NOW | RTLD_GLOBAL);
-    if (handle == nullptr) {
+    if (library == nullptr || *library == '\0') {
+#define LODESTONE_BIND_EGL(name) egl.name = &::name;
+        LODESTONE_EGL_FUNCTIONS(LODESTONE_BIND_EGL)
+#undef LODESTONE_BIND_EGL
+        LOGI("EGL served by Android");
+        return true;
+    }
+
+    g_eglHandle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    if (g_eglHandle == nullptr) {
         LOGE("EGL library %s did not load: %s", library, dlerror());
         return false;
     }
 
     bool complete = true;
 #define LODESTONE_RESOLVE_EGL(name)                                                    \
-    egl.name = reinterpret_cast<decltype(&::name)>(dlsym(handle, #name));              \
+    egl.name = reinterpret_cast<decltype(&::name)>(dlsym(g_eglHandle, #name));         \
     if (egl.name == nullptr) {                                                         \
         LOGE("%s exports no %s", library, #name);                                      \
         complete = false;                                                              \
@@ -168,33 +184,28 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
 
 } // namespace
 
-extern "C" {
+namespace lodestone::glfw {
 
-// ---------------------------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------------------------
-
-__attribute__((visibility("default"))) int glfwInit() {
+bool initialiseEgl(const char* eglLibrary, bool desktopGl) {
     auto& s = state();
     if (s.initialised.load()) {
-        return GLFW_TRUE;
+        return true;
     }
 
-    if (!loadEgl(lodestone::glfw::eglLibrary())) {
-        return GLFW_FALSE;
+    if (!loadEgl(eglLibrary)) {
+        return false;
     }
-    const bool desktopGl = lodestone::glfw::eglServesDesktopGl();
 
     s.display = egl.eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (s.display == EGL_NO_DISPLAY || egl.eglInitialize(s.display, nullptr, nullptr) != EGL_TRUE) {
         LOGE("eglInitialize failed: 0x%04x", egl.eglGetError());
-        return GLFW_FALSE;
+        return false;
     }
 
     // EGL defaults to the ES API, and a desktop context has to be asked for before it is created.
     if (desktopGl && egl.eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) {
         LOGE("eglBindAPI(EGL_OPENGL_API) failed: 0x%04x", egl.eglGetError());
-        return GLFW_FALSE;
+        return false;
     }
 
     // Minecraft needs a depth buffer and 8-bit colour; it manages its own stencil and multisample
@@ -214,7 +225,7 @@ __attribute__((visibility("default"))) int glfwInit() {
     if (egl.eglChooseConfig(s.display, attributes, &s.config, 1, &configCount) != EGL_TRUE ||
         configCount == 0) {
         LOGE("no suitable EGL config: 0x%04x", egl.eglGetError());
-        return GLFW_FALSE;
+        return false;
     }
 
     // 3.2 core is what Minecraft asks for from 1.17 onwards. Requesting exactly that rather than
@@ -230,7 +241,7 @@ __attribute__((visibility("default"))) int glfwInit() {
     s.context = egl.eglCreateContext(s.display, s.config, EGL_NO_CONTEXT, contextAttributes);
     if (s.context == EGL_NO_CONTEXT) {
         LOGE("eglCreateContext failed: 0x%04x", egl.eglGetError());
-        return GLFW_FALSE;
+        return false;
     }
 
     // One pixel, because nothing is ever meant to be read back from it: it exists so that a thread
@@ -242,30 +253,62 @@ __attribute__((visibility("default"))) int glfwInit() {
     }
 
     s.initialised.store(true);
-    LOGI("GLFW shim initialised");
-    return GLFW_TRUE;
+    LOGI("EGL up: %s context", desktopGl ? "desktop GL" : "GL ES");
+    return true;
+}
+
+void shutdownEgl() {
+    auto& s = state();
+    s.initialised.store(false);
+
+    if (s.display != EGL_NO_DISPLAY) {
+        egl.eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (s.surface != EGL_NO_SURFACE) {
+            egl.eglDestroySurface(s.display, s.surface);
+            s.surface = EGL_NO_SURFACE;
+        }
+        if (s.placeholder != EGL_NO_SURFACE) {
+            egl.eglDestroySurface(s.display, s.placeholder);
+            s.placeholder = EGL_NO_SURFACE;
+        }
+        if (s.context != EGL_NO_CONTEXT) {
+            egl.eglDestroyContext(s.display, s.context);
+            s.context = EGL_NO_CONTEXT;
+        }
+        egl.eglTerminate(s.display);
+        s.display = EGL_NO_DISPLAY;
+    }
+    s.config = nullptr;
+
+    // Unloaded, not just forgotten. Mesa's EGL answers to the SONAME `libEGL.so`, so leaving a
+    // rejected copy in the process would leave it able to satisfy a later request for Android's.
+    if (g_eglHandle != nullptr) {
+        dlclose(g_eglHandle);
+        g_eglHandle = nullptr;
+    }
+    egl = EglApi{};
+}
+
+} // namespace lodestone::glfw
+
+extern "C" {
+
+// ---------------------------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Reports whether a renderer is up, rather than bringing one up.
+ *
+ * The choice was made in the Activity before the VM started, because it is only settled by taking a
+ * renderer as far as a live EGL context and there is no way back from here if it fails.
+ */
+__attribute__((visibility("default"))) int glfwInit() {
+    return state().initialised.load() ? GLFW_TRUE : GLFW_FALSE;
 }
 
 __attribute__((visibility("default"))) void glfwTerminate() {
-    auto& s = state();
-    if (!s.initialised.exchange(false)) {
-        return;
-    }
-    egl.eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-    if (s.surface != EGL_NO_SURFACE) {
-        egl.eglDestroySurface(s.display, s.surface);
-        s.surface = EGL_NO_SURFACE;
-    }
-    if (s.placeholder != EGL_NO_SURFACE) {
-        egl.eglDestroySurface(s.display, s.placeholder);
-        s.placeholder = EGL_NO_SURFACE;
-    }
-    if (s.context != EGL_NO_CONTEXT) {
-        egl.eglDestroyContext(s.display, s.context);
-        s.context = EGL_NO_CONTEXT;
-    }
-    egl.eglTerminate(s.display);
-    s.display = EGL_NO_DISPLAY;
+    lodestone::glfw::shutdownEgl();
 }
 
 __attribute__((visibility("default"))) int glfwGetError(const char** description) {

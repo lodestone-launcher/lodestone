@@ -9,6 +9,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // The subset of GLFW 3.4's public constants that Minecraft and LWJGL actually reference. Values
 // must match upstream exactly: LWJGL passes them straight through from Java.
@@ -140,7 +141,30 @@ WindowState& state();
 void postEvent(const Event& event);
 
 /**
- * Opens the desktop-GL translation layer at [path], or returns the handle already open.
+ * One renderer the shim can bring up: a desktop-GL translation layer and the EGL that drives it.
+ *
+ * gl4es rewrites desktop GL onto the device's own GL ES driver, so it wants Android's EGL and an ES
+ * context — which is what an empty [eglLibrary] selects, since the shim links against it already.
+ * Zink is a Mesa driver: its GL entry points only work on a context that Mesa's own EGL created,
+ * and that EGL is a different library. Neither can be chosen at link time.
+ */
+struct RendererCandidate {
+    std::string id;
+    std::string layerPath;
+    std::string eglLibrary;
+};
+
+/**
+ * Brings up the first of [candidates] that works, and returns its index — or -1 if none did.
+ *
+ * Whether a renderer works is not a question of whether its libraries are on disk. Zink is packaged
+ * and loads perfectly well on a device whose Vulkan driver it cannot drive, and only says so when
+ * `eglInitialize` fails; that used to reach the game as "Failed to initialize GLFW" with no way
+ * back. So each candidate is taken as far as a live EGL context before it is believed, and one that
+ * does not get there is torn down completely and the next is tried.
+ *
+ * An empty list brings up Android's EGL with no layer at all, for a game that talks to the driver
+ * itself.
  *
  * Must not be called from the render thread. gl4es probes the driver from an ELF constructor, and
  * that probe ends by calling `eglMakeCurrent(display, 0, 0, EGL_NO_CONTEXT)` on whichever thread
@@ -148,21 +172,20 @@ void postEvent(const Event& event);
  * unbinds the context Minecraft has just made current, and the first framebuffer call then fails
  * with no status at all rather than an error.
  */
-void* loadTranslationLayer(const char* path, const char* eglLibrary);
+int selectRenderer(const std::vector<RendererCandidate>& candidates);
 
-/** The translation layer opened by [loadTranslationLayer], or null when none was. */
+/** The translation layer [selectRenderer] settled on, or null when none was. */
 void* translationLayer();
 
 /**
- * The EGL implementation the shim drives, or `libEGL.so` when nothing else was selected.
+ * Brings up EGL from [eglLibrary], or Android's own when it is null or empty.
  *
- * gl4es rewrites desktop GL onto the device's own GLES driver, so it wants Android's EGL and an ES
- * context. Zink is a Mesa driver: its GL entry points only work on a context that Mesa's own EGL
- * created, and that EGL is a different library. Neither can be chosen at link time.
+ * Implemented beside the rest of the EGL plumbing in glfw_api.cpp, and only meant for
+ * [selectRenderer] to call.
  */
-const char* eglLibrary();
+bool initialiseEgl(const char* eglLibrary, bool desktopGl);
 
-/** Whether [eglLibrary] serves desktop OpenGL rather than OpenGL ES. */
-bool eglServesDesktopGl();
+/** Undoes [initialiseEgl] completely, so that another candidate can be tried on a clean slate. */
+void shutdownEgl();
 
 } // namespace lodestone::glfw
