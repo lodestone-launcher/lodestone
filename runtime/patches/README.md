@@ -17,6 +17,16 @@ so their order is stable (`0001-…`, `0002-…`).
   context can only ever be an ES one. Zink's entire purpose here is a desktop GL context, so the
   Android exclusion is dropped. Verified on the artifact rather than the build log: `eglBindAPI` in
   the resulting `libEGL_zink.so` compiles to `(api & ~2) == 0x30a0`, which admits `0x30a2`.
+- **`mesa/0003-connect-the-native-window-when-egl-is-loaded-directly.patch`** — Mesa's Android EGL
+  is written to run *behind* Android's `libEGL`, whose `eglCreateWindowSurface` has already called
+  `native_window_api_connect(NATIVE_WINDOW_API_EGL)` before dispatching to the driver. We dlopen it
+  directly instead, so nothing claims the window and its BufferQueue answers every `dequeueBuffer`
+  with `NO_INIT` — leaving the default framebuffer with no colour attachment, which Zink then
+  dereferences in `begin_rendering`. `droid_create_surface` now connects and `droid_destroy_surface`
+  disconnects. `native_window_api_connect` is a `perform()` inline that only Mesa's legacy
+  `system/window.h` declares, and that header duplicates — incompatibly — the types
+  `nativebase/nativebase.h` owns, so it is made to include its sibling instead, as AOSP's own copy
+  does.
 
 # OpenJDK
 
