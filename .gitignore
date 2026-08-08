@@ -24,6 +24,9 @@ app/src/main/jniLibs/*/libgl4es.so
 # directory per LWJGL release, because the generated JNI libraries bind only to the release they
 # were generated from, and they are assets rather than jniLibs so that the sets can be told apart:
 # the installer only extracts the top level of lib/<abi>/, and LWJGL loads them by their real names.
+# A set also carries an lwjgl2/ subdirectory holding the OpenGL bindings again with their JNI
+# symbols relocated, which is what the LWJGL 2 compatibility layer resolves against; same file name
+# as the stock build, because the relocated Java side still asks for lwjgl_opengl.
 app/src/main/assets/lwjgl/
 # FreeType and OpenAL Soft come out of the same script. The freetype and openal bindings have no
 # JNI library of their own — they go through libffi by symbol name — so one build of each serves

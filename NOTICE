@@ -47,7 +47,27 @@ LWJGL 3.3.3  (and its vendored stb and tinyfiledialogs)
     BSD-3-Clause
     https://github.com/LWJGL/lwjgl3
 
-    Unmodified. Cross-compiled for Android; see runtime/build-lwjgl.sh.
+    Unmodified where it stands on its own. Cross-compiled for Android; see
+    runtime/build-lwjgl.sh.
+
+    Repackaged for the LWJGL 2 compatibility layer, which redistributes the
+    core, GLFW and OpenGL modules inside one jar. The OpenGL module's classes
+    are moved to com.github.lodestone.lwjgl3.opengl and its JNI symbols renamed
+    to match, because the layer has to declare org.lwjgl.opengl itself and the
+    two would otherwise collide. No source is otherwise changed; the rename is
+    applied by build-lwjgl.sh and by the relocation task in app/build.gradle.kts,
+    both of which are mechanical and reproducible from the upstream tag.
+
+LWJGL 2.9.4
+    BSD-3-Clause
+    https://github.com/LWJGL/lwjgl
+
+    Not distributed. Its jar is read at development time by
+    runtime/generate-lwjgl2-bindings.py, which takes the class names, method
+    signatures and constant values the compatibility layer is obliged to declare
+    so that a game compiled against LWJGL 2 links against it. The generated
+    bodies are ours and forward to LWJGL 3; nothing is copied from LWJGL 2's
+    implementation.
 
 FreeType
     FTL  (dual-licensed FTL / GPL-2.0; Lodestone takes the FTL)
