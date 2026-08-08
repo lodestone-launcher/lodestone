@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <string>
 
 // The subset of GLFW 3.4's public constants that Minecraft and LWJGL actually reference. Values
 // must match upstream exactly: LWJGL passes them straight through from Java.
@@ -102,6 +103,10 @@ struct WindowState {
     std::atomic_int width{1280};
     std::atomic_int height{720};
     std::atomic_int swapInterval{1};
+
+    // Nothing displays this, but GLFW 3.4 lets the title be read back and LWJGL resolves
+    // `glfwGetWindowTitle` eagerly, so it has to exist and answer with what was set.
+    std::string title;
 
     // --- Input ---------------------------------------------------------------------------------
     std::mutex eventMutex;

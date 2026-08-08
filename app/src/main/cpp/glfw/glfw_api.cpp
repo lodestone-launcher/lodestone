@@ -314,7 +314,8 @@ __attribute__((visibility("default"))) GLFWwindow* glfwCreateWindow(
         s.width.store(width);
         s.height.store(height);
     }
-    LOGI("window requested: %dx%d (%s)", width, height, title != nullptr ? title : "");
+    s.title = title != nullptr ? title : "";
+    LOGI("window requested: %dx%d (%s)", width, height, s.title.c_str());
     return kWindowHandle;
 }
 
@@ -354,10 +355,19 @@ __attribute__((visibility("default"))) void glfwGetWindowPos(GLFWwindow*, int* x
     if (y != nullptr) *y = 0;
 }
 
+// Android shows the activity's own label, so the title only has to survive a round trip. The
+// returned pointer follows GLFW's contract: valid until the title is set again.
+__attribute__((visibility("default"))) void glfwSetWindowTitle(GLFWwindow*, const char* title) {
+    state().title = title != nullptr ? title : "";
+}
+
+__attribute__((visibility("default"))) const char* glfwGetWindowTitle(GLFWwindow*) {
+    return state().title.c_str();
+}
+
 // The window is the whole screen and cannot be moved, resized, iconified or decorated.
 __attribute__((visibility("default"))) void glfwSetWindowPos(GLFWwindow*, int, int) {}
 __attribute__((visibility("default"))) void glfwSetWindowSize(GLFWwindow*, int, int) {}
-__attribute__((visibility("default"))) void glfwSetWindowTitle(GLFWwindow*, const char*) {}
 __attribute__((visibility("default"))) void glfwSetWindowIcon(GLFWwindow*, int, const void*) {}
 __attribute__((visibility("default"))) void glfwSetWindowSizeLimits(
         GLFWwindow*, int, int, int, int) {}
