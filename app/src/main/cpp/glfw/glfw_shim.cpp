@@ -34,11 +34,17 @@ void applyEnvironment(bool desktopGl) {
         setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 1);
         setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 1);
         setenv("GALLIUM_THREAD", "0", 1);
-        // Android's Vulkan loader only offers the vendor driver, and Qualcomm's exposes no
-        // VK_EXT_external_memory_dma_buf. Zink needs it to render into the window's gralloc buffer:
-        // without it every import fails, the game draws into an off-screen buffer of Mesa's own and
-        // the surface is presented untouched — a black screen. Turnip supports it, so ship it and
-        // point Zink at it, leaving the loader's default for devices we have no driver for.
+        // Zink renders into the window's own gralloc buffer, which it has to import as a dma-buf,
+        // and that import is where the vendor drivers fall down rather than at context creation.
+        // Measured on an Adreno 720: pointed at the Qualcomm blob instead of Turnip, Zink comes up
+        // and reports GL 4.6, the game runs, and every frame logs "failed to create DRI image from
+        // FD" and presents an untouched buffer — a black screen behind a healthy frame loop, which
+        // is the worst way for this to fail. The blob does advertise the dma-buf and modifier
+        // extensions, so what breaks is the import itself, not their absence.
+        //
+        // Turnip imports these buffers correctly, so it is shipped and pointed at. Where Turnip has
+        // no entry for the GPU it declines at eglInitialize, which is loud, early, and something
+        // selectRenderer can still act on.
         setenv("ZINK_VULKAN_LIBRARY", "libvulkan_freedreno.so", 1);
         return;
     }
