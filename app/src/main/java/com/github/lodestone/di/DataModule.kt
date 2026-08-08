@@ -3,6 +3,7 @@ package com.github.lodestone.di
 import android.content.Context
 import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.data.remote.download.DownloadEngine
+import com.github.lodestone.data.repository.RuntimeInstaller
 import com.github.lodestone.data.repository.VersionInstaller
 import com.github.lodestone.domain.usecase.BuildLaunchSpecUseCase
 import com.github.lodestone.runtime.JavaRuntimeManager
@@ -36,7 +37,26 @@ interface DataModule {
         client: HttpClient,
         downloads: DownloadEngine,
         files: GameFiles,
-    ): VersionInstaller = VersionInstaller(client, downloads, files)
+        runtimeInstaller: RuntimeInstaller,
+    ): VersionInstaller = VersionInstaller(client, downloads, files, runtimeInstaller)
+
+    @Provides
+    @SingleIn(AppScope::class)
+    fun provideRuntimeInstaller(
+        context: Context,
+        client: HttpClient,
+        downloads: DownloadEngine,
+        files: GameFiles,
+        runtimes: JavaRuntimeManager,
+    ): RuntimeInstaller = RuntimeInstaller(
+        client = client,
+        downloads = downloads,
+        files = files,
+        runtimes = runtimes,
+        // Opened lazily rather than read here: the packaged manifest is only ever needed when the
+        // network and the on-disk cache have both failed.
+        bundledManifest = { context.assets.open(RUNTIME_MANIFEST_ASSET) },
+    )
 
     @Provides
     @SingleIn(AppScope::class)
@@ -49,3 +69,6 @@ interface DataModule {
     @SingleIn(AppScope::class)
     fun provideJavaRuntimeManager(files: GameFiles): JavaRuntimeManager = JavaRuntimeManager(files)
 }
+
+/** Packaged from the same path the published manifest is served from. */
+private const val RUNTIME_MANIFEST_ASSET = "runtimes.json"

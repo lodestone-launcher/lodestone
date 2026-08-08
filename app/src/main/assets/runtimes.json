@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "runtimes": [
+    {
+      "feature": 17,
+      "abi": "arm64-v8a",
+      "url": "https://github.com/lodestone-launcher/jdk17u/releases/download/lodestone-jre17-v1/lodestone-jre17-arm64-v8a.tar.gz",
+      "size": 185123815,
+      "installedSize": 308591628,
+      "sha256": "39b194cd12beebb7ac8a7d67978fb4dc78dd82f6101833d65c6bcb92433b849a",
+      "javaVersion": "17.0.21"
+    },
+    {
+      "feature": 21,
+      "abi": "arm64-v8a",
+      "url": "https://github.com/lodestone-launcher/jdk21u/releases/download/lodestone-jre21-v1/lodestone-jre21-arm64-v8a.tar.gz",
+      "size": 199606510,
+      "installedSize": 335183228,
+      "sha256": "1b4d4241cdbabce7d6fe9c2c66925a5ea575c42540d8c063e104fdc889179bd0",
+      "javaVersion": "21.0.13"
+    },
+    {
+      "feature": 25,
+      "abi": "arm64-v8a",
+      "url": "https://github.com/lodestone-launcher/jdk25u/releases/download/lodestone-jre25-v1/lodestone-jre25-arm64-v8a.tar.gz",
+      "size": 206781824,
+      "installedSize": 339326869,
+      "sha256": "4800382744bd0eca1fca3b134336b06e4875fd2789d190a1b5afe6c02fbd0354",
+      "javaVersion": "25.0.5"
+    }
+  ]
+}

@@ -31,6 +31,13 @@ sealed interface InstallStage {
     data class Downloading(val progress: DownloadProgress) : InstallStage
     data object UnpackingNatives : InstallStage
     data object PreparingAssets : InstallStage
+    data class InstallingRuntime(val stage: RuntimeStage) : InstallStage
+
+    /**
+     * The game is installed but its Java runtime is not published for this device yet. Reported
+     * rather than thrown: everything else finished, and the install is worth keeping.
+     */
+    data class RuntimeUnavailable(val reason: String) : InstallStage
     data class Done(val version: ResolvedVersion) : InstallStage
 }
 
@@ -44,6 +51,7 @@ class VersionInstaller(
     private val client: HttpClient,
     private val downloads: DownloadEngine,
     private val files: GameFiles,
+    private val runtimeInstaller: RuntimeInstaller,
 ) {
 
     suspend fun install(
@@ -78,8 +86,30 @@ class VersionInstaller(
         onStage(InstallStage.PreparingAssets)
         materialiseLegacyAssets(version, assetIndex)
 
+        installRuntime(version, onStage)
+
         onStage(InstallStage.Done(version))
         version
+    }
+
+    /**
+     * Fetches the Java runtime the version asks for.
+     *
+     * Last, because it is by far the largest download and everything before it is useless without
+     * the game files anyway. A runtime that is not published — Java 8 is still being cross-built —
+     * leaves an install that is complete apart from being unable to launch, which is worth saying
+     * out loud rather than throwing away.
+     */
+    private suspend fun installRuntime(version: ResolvedVersion, onStage: (InstallStage) -> Unit) {
+        val feature = runtimeInstaller.featureFor(version.javaVersion)
+        try {
+            runtimeInstaller.ensureInstalled(feature) { stage ->
+                onStage(InstallStage.InstallingRuntime(stage))
+            }
+        } catch (failure: RuntimeUnavailableException) {
+            Timber.w(failure, "No Java %d runtime for this device", feature)
+            onStage(InstallStage.RuntimeUnavailable(failure.message.orEmpty()))
+        }
     }
 
     /** Resolves an already-installed version from the on-disk manifests, without downloading. */

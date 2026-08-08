@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -16,6 +17,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -36,6 +38,14 @@ import com.github.lodestone.domain.model.version.VersionEntry
 fun HomeScreen(viewModel: HomeViewModel, modifier: Modifier = Modifier) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    state.runtimePrompt?.let { prompt ->
+        RuntimeDownloadDialog(
+            prompt = prompt,
+            onConfirm = { viewModel.confirmRuntimeDownload(context) },
+            onDismiss = viewModel::dismissRuntimePrompt,
+        )
+    }
 
     Scaffold(modifier = modifier.fillMaxSize()) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -104,6 +114,33 @@ private fun ChannelFilter(
             )
         }
     }
+}
+
+/**
+ * Asks before spending the download.
+ *
+ * The size is in the body rather than buried in a log line: this is the one moment where someone on
+ * a metered connection can still say no.
+ */
+@Composable
+private fun RuntimeDownloadDialog(
+    prompt: RuntimePrompt,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Download Java ${prompt.feature}?") },
+        text = {
+            Text(
+                "${prompt.entry.id} needs the Java ${prompt.feature} runtime, which is not " +
+                    "installed. It is a ${prompt.size} download and is kept for every version " +
+                    "that needs it.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Download") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
 }
 
 @Composable

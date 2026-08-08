@@ -150,7 +150,7 @@ class JavaRuntimeManager(private val files: GameFiles) {
             ?.takeIf(File::isFile)
 
     private fun abiDirectory(): String =
-        when (val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull()) {
+        when (val abi = android.os.Build.SUPPORTED_ABIS?.firstOrNull()) {
             "arm64-v8a" -> "aarch64"
             "x86_64" -> "amd64"
             else -> abi ?: "aarch64"

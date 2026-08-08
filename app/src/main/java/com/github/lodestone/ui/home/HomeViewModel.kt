@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import com.github.lodestone.BuildConfig
 import com.github.lodestone.data.repository.InstallStage
+import com.github.lodestone.data.repository.RuntimeInstaller
+import com.github.lodestone.data.repository.RuntimeStage
 import com.github.lodestone.data.repository.VersionInstaller
 import com.github.lodestone.domain.model.version.LaunchEnvironment
 import com.github.lodestone.domain.model.version.VersionChannel
@@ -34,10 +36,22 @@ data class HomeUiState(
     val progressLabel: String? = null,
     val progress: Float = 0f,
     val message: String? = null,
+    val runtimePrompt: RuntimePrompt? = null,
 ) {
     val visibleVersions: List<VersionEntry>
         get() = versions.filter { it.channel == channel }
 }
+
+/**
+ * A pending offer to fetch a Java runtime, raised when Play is pressed on a version whose runtime
+ * is missing. The size is carried so it can be shown before anything is downloaded — a runtime is
+ * two hundred megabytes, which is not something to start on someone's behalf without asking.
+ */
+data class RuntimePrompt(
+    val entry: VersionEntry,
+    val feature: Int,
+    val size: String,
+)
 
 /**
  * Drives the version list and installation.
@@ -48,6 +62,7 @@ data class HomeUiState(
  */
 class HomeViewModel(
     private val installer: VersionInstaller,
+    private val runtimeInstaller: RuntimeInstaller,
     private val buildLaunchSpec: BuildLaunchSpecUseCase,
 ) : ViewModel() {
 
@@ -124,32 +139,79 @@ class HomeViewModel(
     fun launch(context: Context, entry: VersionEntry) {
         viewModelScope.launch {
             _uiState.update { it.copy(message = "Preparing ${entry.id}…") }
-            runCatching {
-                val environment = launchEnvironment()
-                val version = installer.resolve(entry, environment)
-                val result = buildLaunchSpec(
-                    version = version,
-                    account = offlineAccount(),
-                    environment = environment,
-                    options = LaunchOptions(verboseVmStartup = BuildConfig.DEBUG),
-                    nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
-                )
-                when (result) {
-                    is BuildLaunchSpecUseCase.Result.MissingRuntime ->
-                        error("Java ${result.feature} runtime is not installed")
-
-                    is BuildLaunchSpecUseCase.Result.Ready -> {
-                        LaunchRequest.from(result.spec)
-                            .writeTo(File(context.filesDir, GameActivity.LAUNCH_REQUEST_FILE))
-                        context.startActivity(
-                            Intent(context, GameActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
+            runCatching { prepareAndStart(context, entry) }
+                .onFailure { failure ->
+                    Timber.e(failure, "Could not launch %s", entry.id)
+                    _uiState.update { it.copy(message = failure.message ?: "Launch failed") }
                 }
+        }
+    }
+
+    /** Accepts the offer raised by [launch], fetching the runtime and then starting the game. */
+    fun confirmRuntimeDownload(context: Context) {
+        val prompt = _uiState.value.runtimePrompt ?: return
+        if (installJob?.isActive == true) {
+            return
+        }
+        installJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    runtimePrompt = null,
+                    installing = "Java ${prompt.feature} runtime",
+                    progress = 0f,
+                    message = null,
+                )
+            }
+            runCatching {
+                runtimeInstaller.ensureInstalled(prompt.feature) { stage -> onRuntimeStage(stage) }
+                prepareAndStart(context, prompt.entry)
             }.onFailure { failure ->
-                Timber.e(failure, "Could not launch %s", entry.id)
-                _uiState.update { it.copy(message = failure.message ?: "Launch failed") }
+                Timber.e(failure, "Could not install the Java %d runtime", prompt.feature)
+                _uiState.update { it.copy(message = failure.message ?: "Runtime install failed") }
+            }
+            _uiState.update { it.copy(installing = null, progressLabel = null) }
+        }
+    }
+
+    fun dismissRuntimePrompt() {
+        _uiState.update { it.copy(runtimePrompt = null, message = null) }
+    }
+
+    private suspend fun prepareAndStart(context: Context, entry: VersionEntry) {
+        val environment = launchEnvironment()
+        val version = installer.resolve(entry, environment)
+        val result = buildLaunchSpec(
+            version = version,
+            account = offlineAccount(),
+            environment = environment,
+            options = LaunchOptions(verboseVmStartup = BuildConfig.DEBUG),
+            nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
+        )
+        when (result) {
+            // Nothing is downloaded here: the offer names the size first, because a runtime is a
+            // couple of hundred megabytes and Play is not consent to spend them.
+            is BuildLaunchSpecUseCase.Result.MissingRuntime -> {
+                val descriptor = runtimeInstaller.describe(result.feature)
+                _uiState.update {
+                    it.copy(
+                        message = null,
+                        runtimePrompt = RuntimePrompt(
+                            entry = entry,
+                            feature = result.feature,
+                            size = RuntimeInstaller.describeSize(descriptor),
+                        ),
+                    )
+                }
+            }
+
+            is BuildLaunchSpecUseCase.Result.Ready -> {
+                LaunchRequest.from(result.spec)
+                    .writeTo(File(context.filesDir, GameActivity.LAUNCH_REQUEST_FILE))
+                _uiState.update { it.copy(message = null) }
+                context.startActivity(
+                    Intent(context, GameActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
             }
         }
     }
@@ -169,21 +231,48 @@ class HomeViewModel(
     }
 
     private fun onStage(stage: InstallStage) {
-        val label = when (stage) {
-            InstallStage.ResolvingVersion -> "Resolving version"
-            InstallStage.FetchingAssetIndex -> "Fetching asset index"
-            InstallStage.UnpackingNatives -> "Unpacking natives"
-            InstallStage.PreparingAssets -> "Preparing assets"
+        when (stage) {
+            InstallStage.ResolvingVersion -> report("Resolving version")
+            InstallStage.FetchingAssetIndex -> report("Fetching asset index")
+            InstallStage.UnpackingNatives -> report("Unpacking natives")
+            InstallStage.PreparingAssets -> report("Preparing assets")
             is InstallStage.Downloading ->
-                "${stage.progress.completedFiles}/${stage.progress.totalFiles} files"
+                report(
+                    "${stage.progress.completedFiles}/${stage.progress.totalFiles} files",
+                    stage.progress.fraction,
+                )
 
-            is InstallStage.Done -> null
+            is InstallStage.InstallingRuntime -> onRuntimeStage(stage.stage)
+            // Kept on screen after the install finishes, unlike a progress label, because it is the
+            // reason Play will not work.
+            is InstallStage.RuntimeUnavailable ->
+                _uiState.update { it.copy(progressLabel = null, message = stage.reason) }
+
+            is InstallStage.Done -> report(null)
         }
-        val fraction = (stage as? InstallStage.Downloading)?.progress?.fraction
+    }
+
+    private fun onRuntimeStage(stage: RuntimeStage) {
+        when (stage) {
+            RuntimeStage.ResolvingManifest -> report("Looking up the Java runtime")
+            is RuntimeStage.Downloading -> report(
+                "Java ${stage.feature} runtime — ${formatBytes(stage.progress.completedBytes)}" +
+                    " of ${formatBytes(stage.progress.totalBytes)}",
+                stage.progress.fraction,
+            )
+
+            is RuntimeStage.Unpacking -> report("Unpacking the Java ${stage.feature} runtime", 1f)
+            is RuntimeStage.Done -> report(null)
+        }
+    }
+
+    private fun report(label: String?, fraction: Float? = null) {
         _uiState.update {
             it.copy(progressLabel = label, progress = fraction ?: it.progress)
         }
     }
+
+    private fun formatBytes(bytes: Long): String = "%.0f MB".format(bytes / (1024.0 * 1024))
 
     /**
      * Describes this device to the rule engine. Always Linux — Android is Linux as far as every

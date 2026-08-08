@@ -27,7 +27,11 @@ class MainActivity : ComponentActivity() {
                     factory = object : ViewModelProvider.Factory {
                         @Suppress("UNCHECKED_CAST")
                         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                            HomeViewModel(graph.versionInstaller, graph.buildLaunchSpec) as T
+                            HomeViewModel(
+                                graph.versionInstaller,
+                                graph.runtimeInstaller,
+                                graph.buildLaunchSpec,
+                            ) as T
                     },
                 )
                 HomeScreen(viewModel = homeViewModel)
