@@ -1,8 +1,10 @@
 package com.github.lodestone.di
 
 import android.content.Context
+import android.os.Build
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.github.lodestone.data.local.files.GameFiles
+import com.github.lodestone.data.local.files.LwjglNativesSource
 import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.remote.download.DownloadEngine
 import com.github.lodestone.data.repository.RuntimeInstaller
@@ -65,7 +67,26 @@ interface DataModule {
     fun provideBuildLaunchSpec(
         files: GameFiles,
         runtimes: JavaRuntimeManager,
-    ): BuildLaunchSpecUseCase = BuildLaunchSpecUseCase(files, runtimes)
+        lwjglNatives: LwjglNativesSource,
+    ): BuildLaunchSpecUseCase = BuildLaunchSpecUseCase(files, runtimes, lwjglNatives)
+
+    /**
+     * The packaged LWJGL sets, which are assets rather than jniLibs: the installer only ever
+     * extracts the top level of `lib/<abi>/`, so two sets could not be told apart there without
+     * renaming the libraries, and LWJGL loads them by their real names.
+     *
+     * The ABIs are tried in the order the device prefers them, which is also the order the APK's
+     * own libraries are chosen in, so an x86_64 emulator running an APK built for both picks its
+     * own rather than failing over to one it cannot load.
+     */
+    @Provides
+    @SingleIn(AppScope::class)
+    fun provideLwjglNatives(context: Context): LwjglNativesSource =
+        LwjglNativesSource { set, name ->
+            Build.SUPPORTED_ABIS.firstNotNullOfOrNull { abi ->
+                runCatching { context.assets.open("${set.assetPath}/$abi/$name") }.getOrNull()
+            }
+        }
 
     @Provides
     @SingleIn(AppScope::class)

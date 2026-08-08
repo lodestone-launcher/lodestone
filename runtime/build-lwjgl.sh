@@ -6,7 +6,8 @@
 # natives jar, and those fall into two kinds. A binding that goes through `Library.loadSystem`
 # ships generated JNI stubs and needs a `liblwjgl_<module>.so`; a binding that goes through
 # `Library.loadNative` has no native code of its own at all — it dispatches through core's libffi
-# and the jar ships the third-party library instead. Surveying LWJGL 3.3.3, as 1.21.4 pins it:
+# and the jar ships the third-party library instead. The table below is read back off the published
+# `-natives-linux` jars, which is the only statement of it that cannot drift:
 #
 #   natives jar        .so it unpacks          C files  built here from
 #   -----------------  ----------------------  -------  ----------------------------------------
@@ -19,6 +20,14 @@
 #   lwjgl-glfw         libglfw.so                    -   not built: our own shim stands in for it.
 #   lwjgl-jemalloc     libjemalloc.so                -   not built, see below.
 #   com.mojang:jtracy  libjtracy-jni-linux.so        -   not built, see below.
+#
+# The first four are generated from the bindings of one exact LWJGL release and only ever match
+# that release's Java side: 26.2 moves to 3.4.1, whose `LibFFI` class calls an
+# `ffi_get_closure_size` that does not exist in 3.3.3's core, and the launch dies at the first
+# `GLFWErrorCallback.create`. So they are built once per LWJGL version Lodestone supports and
+# `--output` keeps the sets apart. The last two are upstream projects the bindings reach through
+# libffi by symbol name, with no generated code and no version coupling, so one build of each
+# serves every set; `--third-party no` skips them when adding a set.
 #
 # jemalloc is skipped because `MemoryManage.getInstance` catches the failure to instantiate
 # `JEmallocAllocator` and falls back to the stdlib allocator; the launcher also asks for that
@@ -36,17 +45,19 @@
 # built first here.
 #
 # Usage: build-lwjgl.sh [--version 3.3.3] [--abi arm64-v8a] [--output <dir>] [--ndk <path>]
+#                       [--third-party yes|no] [--libffi <tag>]
 set -euo pipefail
 
 LWJGL_VERSION="3.3.3"
 ABIS=()
-OUTPUT="$(pwd)/out/lwjgl"
+OUTPUT=""
+THIRD_PARTY="yes"
 NDK="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
 API=26
 WORK="${TMPDIR:-/tmp}/lodestone-lwjgl"
 
 LIBFFI_REPO="https://github.com/libffi/libffi.git"
-LIBFFI_TAG="v3.4.6"
+LIBFFI_TAG=""
 LWJGL_REPO="https://github.com/LWJGL/lwjgl3.git"
 # LWJGL builds these two from untagged commits a few days either side of a release. The nearest
 # tags are used instead, which for OpenAL Soft gives byte-identical coverage of the entry points
@@ -61,6 +72,8 @@ while [[ $# -gt 0 ]]; do
         --version) LWJGL_VERSION="$2"; shift 2 ;;
         --abi) ABIS+=("$2"); shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
+        --third-party) THIRD_PARTY="$2"; shift 2 ;;
+        --libffi) LIBFFI_TAG="$2"; shift 2 ;;
         --ndk) NDK="$2"; shift 2 ;;
         --api) API="$2"; shift 2 ;;
         --work) WORK="$2"; shift 2 ;;
@@ -71,6 +84,21 @@ done
 if [[ ${#ABIS[@]} -eq 0 ]]; then
     ABIS=(arm64-v8a x86_64)
 fi
+# Defaulted after parsing so that the version reaches the path: two sets written to one directory
+# would leave whichever ran last standing in for both.
+OUTPUT="${OUTPUT:-$(pwd)/out/lwjgl/${LWJGL_VERSION}}"
+
+# core's generated `LibFFI.c` calls whatever libffi the release was generated against, so the
+# checkout has to track it: 3.4.0's notes record the move to libffi 3.5.2, which is where
+# `ffi_get_version`, `ffi_get_version_number`, `ffi_get_default_abi` and `ffi_get_closure_size`
+# first appear. Building 3.4.x against 3.4.6 fails outright on those four; building 3.3.3 against
+# 3.5.2 would link but is left alone, since that set is already shipped and verified.
+if [[ -z "${LIBFFI_TAG}" ]]; then
+    case "${LWJGL_VERSION}" in
+        3.3.*) LIBFFI_TAG="v3.4.6" ;;
+        *) LIBFFI_TAG="v3.5.2" ;;
+    esac
+fi
 [[ -n "${NDK}" ]] || { echo "Set ANDROID_NDK_HOME or pass --ndk" >&2; exit 2; }
 
 TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64"
@@ -80,19 +108,21 @@ TOOLCHAIN_FILE="${NDK}/build/cmake/android.toolchain.cmake"
 [[ -f "${TOOLCHAIN_FILE}" ]] || { echo "No CMake toolchain at ${TOOLCHAIN_FILE}" >&2; exit 2; }
 
 READELF="${TOOLCHAIN}/bin/llvm-readelf"
+STRIP="${TOOLCHAIN}/bin/llvm-strip"
 
 mkdir -p "${WORK}" "${OUTPUT}"
 
 # --------------------------------------------------------------------------------------------
 # Sources
 # --------------------------------------------------------------------------------------------
-LWJGL_SRC="${WORK}/lwjgl3"
+# Per version, so that a second set does not quietly compile from the first one's checkout.
+LWJGL_SRC="${WORK}/lwjgl3-${LWJGL_VERSION}"
 if [[ ! -d "${LWJGL_SRC}" ]]; then
     echo "==> Cloning LWJGL ${LWJGL_VERSION}"
     git clone --depth 1 --branch "${LWJGL_VERSION}" "${LWJGL_REPO}" "${LWJGL_SRC}"
 fi
 
-LIBFFI_SRC="${WORK}/libffi"
+LIBFFI_SRC="${WORK}/libffi-${LIBFFI_TAG}"
 if [[ ! -d "${LIBFFI_SRC}" ]]; then
     echo "==> Cloning libffi ${LIBFFI_TAG}"
     git clone --depth 1 --branch "${LIBFFI_TAG}" "${LIBFFI_REPO}" "${LIBFFI_SRC}"
@@ -100,13 +130,13 @@ if [[ ! -d "${LIBFFI_SRC}" ]]; then
 fi
 
 FREETYPE_SRC="${WORK}/freetype"
-if [[ ! -d "${FREETYPE_SRC}" ]]; then
+if [[ "${THIRD_PARTY}" == "yes" && ! -d "${FREETYPE_SRC}" ]]; then
     echo "==> Cloning FreeType ${FREETYPE_TAG}"
     git clone --depth 1 --branch "${FREETYPE_TAG}" "${FREETYPE_REPO}" "${FREETYPE_SRC}"
 fi
 
 OPENAL_SRC="${WORK}/openal-soft"
-if [[ ! -d "${OPENAL_SRC}" ]]; then
+if [[ "${THIRD_PARTY}" == "yes" && ! -d "${OPENAL_SRC}" ]]; then
     echo "==> Cloning OpenAL Soft ${OPENAL_TAG}"
     git clone --depth 1 --branch "${OPENAL_TAG}" "${OPENAL_REPO}" "${OPENAL_SRC}"
 fi
@@ -163,8 +193,8 @@ for abi in "${ABIS[@]}"; do
     # ----------------------------------------------------------------------------------------
     # libffi
     # ----------------------------------------------------------------------------------------
-    ffi_build="${WORK}/libffi-${abi}"
-    ffi_prefix="${WORK}/libffi-install-${abi}"
+    ffi_build="${WORK}/libffi-${LIBFFI_TAG}-${abi}"
+    ffi_prefix="${WORK}/libffi-install-${LIBFFI_TAG}-${abi}"
     if [[ ! -f "${ffi_prefix}/lib/libffi.a" ]]; then
         echo "==> Building libffi for ${abi}"
         rm -rf "${ffi_build}"
@@ -274,57 +304,71 @@ for abi in "${ABIS[@]}"; do
     # ----------------------------------------------------------------------------------------
     # The libraries the libffi-dispatched bindings open
     # ----------------------------------------------------------------------------------------
-    # Both projects still declare `cmake_minimum_required(VERSION 3.0)`, which CMake 4 refuses
-    # outright; the compatibility floor is what lets a current CMake configure them at all.
-    cmake_flags=(
-        -G Ninja
-        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-        -DANDROID_ABI="${abi}"
-        -DANDROID_PLATFORM="android-${API}"
-        -DCMAKE_BUILD_TYPE=Release
-    )
+    if [[ "${THIRD_PARTY}" == "yes" ]]; then
+        # Both projects still declare `cmake_minimum_required(VERSION 3.0)`, which CMake 4 refuses
+        # outright; the compatibility floor is what lets a current CMake configure them at all.
+        cmake_flags=(
+            -G Ninja
+            -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DANDROID_ABI="${abi}"
+            -DANDROID_PLATFORM="android-${API}"
+            -DCMAKE_BUILD_TYPE=Release
+        )
 
-    echo "==> Building FreeType for ${abi}"
-    ft_build="${WORK}/freetype-${abi}"
-    # Upstream LWJGL bundles HarfBuzz inside its libfreetype.so, but the freetype binding resolves
-    # no `hb_` symbol — HarfBuzz is a separate module Minecraft does not ship — so it is left out
-    # along with the other optional codecs, which only exist to decode formats fonts do not use.
-    cmake -S "${FREETYPE_SRC}" -B "${ft_build}" "${cmake_flags[@]}" \
-        -DBUILD_SHARED_LIBS=ON \
-        -DFT_DISABLE_HARFBUZZ=ON \
-        -DFT_DISABLE_BROTLI=ON \
-        -DFT_DISABLE_BZIP2=ON \
-        -DFT_DISABLE_PNG=ON \
-        -DFT_DISABLE_ZLIB=ON
-    cmake --build "${ft_build}"
-    cp "${ft_build}/libfreetype.so" "${out}/libfreetype.so"
+        echo "==> Building FreeType for ${abi}"
+        ft_build="${WORK}/freetype-${abi}"
+        # Upstream LWJGL bundles HarfBuzz inside its libfreetype.so, but the freetype binding
+        # resolves no `hb_` symbol — HarfBuzz is a separate module Minecraft does not ship — so it
+        # is left out along with the other optional codecs, which only exist to decode formats
+        # fonts do not use.
+        cmake -S "${FREETYPE_SRC}" -B "${ft_build}" "${cmake_flags[@]}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DFT_DISABLE_HARFBUZZ=ON \
+            -DFT_DISABLE_BROTLI=ON \
+            -DFT_DISABLE_BZIP2=ON \
+            -DFT_DISABLE_PNG=ON \
+            -DFT_DISABLE_ZLIB=ON
+        cmake --build "${ft_build}"
+        cp "${ft_build}/libfreetype.so" "${out}/libfreetype.so"
 
-    echo "==> Building OpenAL Soft for ${abi}"
-    al_build="${WORK}/openal-soft-${abi}"
-    # OpenSL ES is the only output path bionic offers; ALSA, PulseAudio and PipeWire are all absent.
-    # The STL is linked statically because this library is dropped on its own into the version's
-    # natives directory, and a libc++_shared.so dependency there would have nothing to resolve to.
-    cmake -S "${OPENAL_SRC}" -B "${al_build}" "${cmake_flags[@]}" \
-        -DANDROID_STL=c++_static \
-        -DLIBTYPE=SHARED \
-        -DALSOFT_BACKEND_OPENSL=ON \
-        -DALSOFT_UTILS=OFF \
-        -DALSOFT_EXAMPLES=OFF \
-        -DALSOFT_INSTALL=OFF
-    cmake --build "${al_build}"
-    cp "${al_build}/libopenal.so" "${out}/libopenal.so"
+        echo "==> Building OpenAL Soft for ${abi}"
+        al_build="${WORK}/openal-soft-${abi}"
+        # OpenSL ES is the only output path bionic offers; ALSA, PulseAudio and PipeWire are all
+        # absent. The STL is linked statically because this library is dropped on its own into the
+        # version's natives directory, and a libc++_shared.so dependency there would have nothing
+        # to resolve to.
+        cmake -S "${OPENAL_SRC}" -B "${al_build}" "${cmake_flags[@]}" \
+            -DANDROID_STL=c++_static \
+            -DLIBTYPE=SHARED \
+            -DALSOFT_BACKEND_OPENSL=ON \
+            -DALSOFT_UTILS=OFF \
+            -DALSOFT_EXAMPLES=OFF \
+            -DALSOFT_INSTALL=OFF
+        cmake --build "${al_build}"
+        cp "${al_build}/libopenal.so" "${out}/libopenal.so"
+    fi
 
     # ----------------------------------------------------------------------------------------
     # Verification
     # ----------------------------------------------------------------------------------------
+    # The JNI sets are packaged as assets, which the Android plugin copies verbatim rather than
+    # stripping the way it does everything under `lib/`. Nothing here is reached except through the
+    # dynamic symbol table, which stripping leaves alone, so the rest is a quarter of the set's size
+    # spent on symbols no loader will ever read.
+    for lib in "${out}"/*.so; do
+        "${STRIP}" "${lib}"
+    done
+
     echo "==> Verifying ${abi}"
     for lib in liblwjgl liblwjgl_opengl liblwjgl_stb liblwjgl_tinyfd; do
         verify "${out}/${lib}.so" "${machine}" jni
     done
-    for lib in libfreetype libopenal; do
-        verify "${out}/${lib}.so" "${machine}" plain
-    done
+    if [[ "${THIRD_PARTY}" == "yes" ]]; then
+        for lib in libfreetype libopenal; do
+            verify "${out}/${lib}.so" "${machine}" plain
+        done
+    fi
 done
 
 echo "==> LWJGL natives written to ${OUTPUT}"

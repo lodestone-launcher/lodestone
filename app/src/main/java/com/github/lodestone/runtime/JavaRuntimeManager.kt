@@ -119,6 +119,9 @@ class JavaRuntimeManager(private val files: GameFiles) {
         nativesDirectory: File,
         shimDirectory: File,
     ): List<String> = buildList {
+        // LWJGL unpacks its own bundled natives unless told where ours already are. Emitted here and
+        // nowhere else: the argument builder used to add it too, and two of them in one command line
+        // meant the effective value was whichever the VM happened to parse last.
         add("-Dorg.lwjgl.librarypath=${nativesDirectory.absolutePath}")
         // Named where the APK unpacked them, which is where the Activity loaded the GLFW shim from.
         // The linker treats two paths to the same library as two libraries, and the shim's window
