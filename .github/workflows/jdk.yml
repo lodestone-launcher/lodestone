@@ -151,10 +151,14 @@ jobs:
         include:
           # FreeType and OpenAL Soft are not generated from the bindings and have no version
           # coupling, so one build of each serves every set and it rides along with the oldest.
+          # The LWJGL 2 compatibility layer is built on 3.3.3 and needs that set's OpenGL bindings
+          # a second time with their JNI symbols relocated, so only that set asks for them.
           - version: "3.3.3"
             third_party: "yes"
+            lwjgl2: "yes"
           - version: "3.4.1"
             third_party: "no"
+            lwjgl2: "no"
     steps:
       - uses: actions/checkout@v4
 
@@ -169,6 +173,7 @@ jobs:
             --version "${{ matrix.version }}" \
             --abi "${{ matrix.abi }}" \
             --third-party "${{ matrix.third_party }}" \
+            --lwjgl2 "${{ matrix.lwjgl2 }}" \
             --output "${{ github.workspace }}/out/${{ matrix.version }}"
 
       - uses: actions/upload-artifact@v4
