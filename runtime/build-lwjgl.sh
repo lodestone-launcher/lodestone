@@ -44,14 +44,27 @@
 # architecture and expects a libffi checkout alongside. libffi supports Android upstream, so it is
 # built first here.
 #
+# `--lwjgl2 yes` emits one more artifact, `<abi>/lwjgl2/liblwjgl_opengl.so`, for the LWJGL 2
+# compatibility layer. That layer has to declare `org.lwjgl.opengl.GL11` itself, which hides
+# LWJGL 3's class of the same name — 243 of the two APIs' class names collide — so the shim jar
+# carries LWJGL 3's opengl bindings relocated into a package of ours. Relocating the Java side
+# renames the JNI symbols the bindings resolve against, and those are compiled here, so the rename
+# is applied to the generated sources before they are compiled a second time. Renaming the built
+# library instead does not work: `llvm-objcopy --redefine-syms` rewrites `.symtab` and leaves
+# `.dynsym`, which is the table JNI resolves through, untouched.
+#
 # Usage: build-lwjgl.sh [--version 3.3.3] [--abi arm64-v8a] [--output <dir>] [--ndk <path>]
-#                       [--third-party yes|no] [--libffi <tag>]
+#                       [--third-party yes|no] [--lwjgl2 yes|no] [--libffi <tag>]
 set -euo pipefail
 
 LWJGL_VERSION="3.3.3"
 ABIS=()
 OUTPUT=""
 THIRD_PARTY="yes"
+LWJGL2="no"
+# Kept in step with the `relocate` call in app/build.gradle.kts by
+# LwjglRelocationTest, which reads the prefix back out of both files.
+LWJGL2_PACKAGE="com.github.lodestone.lwjgl3"
 NDK="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
 API=26
 WORK="${TMPDIR:-/tmp}/lodestone-lwjgl"
@@ -73,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --abi) ABIS+=("$2"); shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
         --third-party) THIRD_PARTY="$2"; shift 2 ;;
+        --lwjgl2) LWJGL2="$2"; shift 2 ;;
         --libffi) LIBFFI_TAG="$2"; shift 2 ;;
         --ndk) NDK="$2"; shift 2 ;;
         --api) API="$2"; shift 2 ;;
@@ -162,6 +176,14 @@ machine_for() {
 # A library built for the wrong architecture links, installs and packages perfectly happily, and
 # only fails at `dlopen` inside the JVM on a device. Read the machine type back off every artifact
 # rather than trusting that the toolchain was the one it was asked for.
+# grep exits 1 when it matches nothing, which under `set -e` would end the run at precisely the
+# point where a rename had succeeded. Counted through here so that no matches reads as a zero.
+count_in() {
+    local pattern="$1"
+    shift
+    grep -ho "${pattern}" "$@" | wc -l | tr -d ' ' || true
+}
+
 verify() {
     local lib="$1" want="$2" kind="$3" machine exports
     machine="$("${READELF}" -h "${lib}" | sed -n 's/^ *Machine: *//p')"
@@ -277,6 +299,36 @@ for abi in "${ABIS[@]}"; do
         $(find "${opengl}/generated/c" -maxdepth 1 -name '*.c' -not -name '*WGL*' -not -name '*GLX*') \
         -ldl -o "${out}/liblwjgl_opengl.so"
 
+    if [[ "${LWJGL2}" == "yes" ]]; then
+        echo "==> Building LWJGL opengl for ${abi}, relocated for the LWJGL 2 layer"
+        # Every `org_lwjgl` in these sources is part of a JNI export name and nothing else — the
+        # count below is asserted against the bindings' native-method count, so a release that
+        # started mentioning the package for some other reason would stop the build rather than
+        # silently rename something it should not.
+        relocated="${WORK}/opengl-lwjgl2-${LWJGL_VERSION}/c"
+        rm -rf "${relocated}"
+        mkdir -p "${relocated}"
+        cp "${opengl}"/generated/c/*.c "${relocated}/"
+        rm -f "${relocated}"/*WGL* "${relocated}"/*GLX*
+        mangled="Java_$(echo "${LWJGL2_PACKAGE}" | tr '.' '_')_opengl_"
+        renamed="$(count_in 'Java_org_lwjgl_opengl_' "${relocated}"/*.c)"
+        mentions="$(count_in 'org_lwjgl[A-Za-z0-9_]*' "${relocated}"/*.c)"
+        [[ "${mentions}" -eq "${renamed}" ]] \
+            || { echo "opengl sources mention org_lwjgl outside a JNI export name" >&2; exit 1; }
+        # BSD sed wants the backup suffix as its own word and GNU sed refuses one; try both.
+        sed -i '' -e "s/Java_org_lwjgl_opengl_/${mangled}/g" "${relocated}"/*.c 2>/dev/null \
+            || sed -i -e "s/Java_org_lwjgl_opengl_/${mangled}/g" "${relocated}"/*.c
+        left="$(count_in 'Java_org_lwjgl_opengl_' "${relocated}"/*.c)"
+        [[ "${left}" -eq 0 ]] \
+            || { echo "${left} JNI export names were not relocated" >&2; exit 1; }
+        mkdir -p "${out}/lwjgl2"
+        # shellcheck disable=SC2046
+        "${CC}" "${jni_flags[@]}" \
+            -I"${opengl}/main/c" \
+            $(find "${relocated}" -maxdepth 1 -name '*.c') \
+            -ldl -o "${out}/lwjgl2/liblwjgl_opengl.so"
+    fi
+
     echo "==> Building LWJGL stb for ${abi}"
     stb="${LWJGL_SRC}/modules/lwjgl/stb/src"
     # Only the generated bindings are compiled: stb's own amalgamation under main/c is #included
@@ -356,14 +408,29 @@ for abi in "${ABIS[@]}"; do
     # stripping the way it does everything under `lib/`. Nothing here is reached except through the
     # dynamic symbol table, which stripping leaves alone, so the rest is a quarter of the set's size
     # spent on symbols no loader will ever read.
-    for lib in "${out}"/*.so; do
+    while IFS= read -r lib; do
         "${STRIP}" "${lib}"
-    done
+    done < <(find "${out}" -name '*.so')
 
     echo "==> Verifying ${abi}"
     for lib in liblwjgl liblwjgl_opengl liblwjgl_stb liblwjgl_tinyfd; do
         verify "${out}/${lib}.so" "${machine}" jni
     done
+    if [[ "${LWJGL2}" == "yes" ]]; then
+        # Read back the dynamic table specifically. This is the check the discarded objcopy
+        # approach passed on `.symtab` while leaving `.dynsym` — the only table JNI reads —
+        # entirely unrenamed.
+        verify "${out}/lwjgl2/liblwjgl_opengl.so" "${machine}" jni
+        stale="$("${READELF}" --dyn-syms "${out}/lwjgl2/liblwjgl_opengl.so" \
+            | grep -c ' Java_org_lwjgl_opengl_' || true)"
+        moved="$("${READELF}" --dyn-syms "${out}/lwjgl2/liblwjgl_opengl.so" \
+            | grep -c " ${mangled}" || true)"
+        [[ "${stale}" -eq 0 && "${moved}" -eq "${renamed}" ]] \
+            || { echo "lwjgl2/liblwjgl_opengl.so exports ${stale} stale and ${moved} relocated" \
+                 "JNI symbols, expected 0 and ${renamed}" >&2; exit 1; }
+        printf '    %-24s %-30s %5s relocated under %s\n' \
+            "lwjgl2/liblwjgl_opengl.so" "${machine}" "${moved}" "${LWJGL2_PACKAGE}.opengl"
+    fi
     if [[ "${THIRD_PARTY}" == "yes" ]]; then
         for lib in libfreetype libopenal; do
             verify "${out}/${lib}.so" "${machine}" plain
