@@ -90,27 +90,39 @@ data class ControlLayout(val placements: List<ControlPlacement> = DEFAULT) {
 
     companion object {
         /**
-         * Pocket Edition's arrangement, as closely as it transfers.
+         * Pocket Edition's arrangement, measured off Pocket Edition.
          *
-         * The stick sits under the left thumb and jump under the right, with the buttons a hand
-         * reaches without leaving either. The right-hand column climbs away from jump in the order
-         * they are wanted mid-action: sneak beside it, attack above, sprint above that.
+         * Not estimated by eye and not invented: the positions below come from segmenting a frame
+         * of Bedrock 1.26 running on a 2670x1200 panel, isolating the control plates by their
+         * desaturation against the world behind them, and taking the centre of each. They are not
+         * readable anywhere else — the touch layout is not in Bedrock's JSON UI, which carries only
+         * its gamepad glyphs, and in the native library it survives as float constants inside
+         * `TouchMoveAndTurnInteractControl` and friends rather than as anything nameable.
          *
-         * The top edge holds what is not part of playing — pause, chat, and the debug screen —
-         * where a thumb does not rest, and clear of the top right, which is where Minecraft slides
-         * its own toasts in.
+         * So: the stick sits left of centre and halfway up, not in the corner. Jump, sprint and
+         * sneak are a triangle on the right at the same height as the stick, an arrangement a
+         * thumb pivots through rather than a row it slides along. The three small buttons ride the
+         * top edge, centred. Nothing sits in the bottom corners at all, which is the part that is
+         * least obvious and most of why this reads as Bedrock.
+         *
+         * Sizes are in dp, converted at the 2.6 density that panel reports.
          */
         val DEFAULT: List<ControlPlacement> = listOf(
-            ControlPlacement(ControlId.STICK, x = 0.125f, y = 0.700f, size = 140f),
-            ControlPlacement(ControlId.JUMP, x = 0.930f, y = 0.790f, size = 76f),
-            ControlPlacement(ControlId.SNEAK, x = 0.820f, y = 0.830f, size = 56f),
-            ControlPlacement(ControlId.ATTACK, x = 0.930f, y = 0.560f, size = 64f),
-            ControlPlacement(ControlId.SPRINT, x = 0.820f, y = 0.600f, size = 56f),
-            ControlPlacement(ControlId.INVENTORY, x = 0.962f, y = 0.310f, size = 50f),
-            ControlPlacement(ControlId.DROP, x = 0.962f, y = 0.150f, size = 44f),
-            ControlPlacement(ControlId.CHAT, x = 0.500f, y = 0.070f, size = 44f),
-            ControlPlacement(ControlId.PAUSE, x = 0.035f, y = 0.080f, size = 44f),
-            ControlPlacement(ControlId.DEBUG, x = 0.105f, y = 0.080f, size = 44f),
+            ControlPlacement(ControlId.STICK, x = 0.149f, y = 0.546f, size = 149f),
+            ControlPlacement(ControlId.JUMP, x = 0.925f, y = 0.394f, size = 58f),
+            ControlPlacement(ControlId.SPRINT, x = 0.826f, y = 0.494f, size = 58f),
+            ControlPlacement(ControlId.SNEAK, x = 0.925f, y = 0.585f, size = 58f),
+            // Bedrock's top row is emote, chat and menu. Java has no emote, so the middle slot goes
+            // to the inventory — which Bedrock reaches from the end of its own hotbar, and Java
+            // cannot, because Java draws that hotbar itself.
+            ControlPlacement(ControlId.CHAT, x = 0.472f, y = 0.033f, size = 25f),
+            ControlPlacement(ControlId.INVENTORY, x = 0.500f, y = 0.033f, size = 25f),
+            ControlPlacement(ControlId.PAUSE, x = 0.528f, y = 0.033f, size = 25f),
+            // Bedrock has none of these. They are placed so that turning one on in the editor puts
+            // it somewhere sensible, and hidden so that the default is what Bedrock's is.
+            ControlPlacement(ControlId.ATTACK, x = 0.826f, y = 0.394f, size = 58f, visible = false),
+            ControlPlacement(ControlId.DROP, x = 0.826f, y = 0.585f, size = 58f, visible = false),
+            ControlPlacement(ControlId.DEBUG, x = 0.440f, y = 0.033f, size = 25f, visible = false),
         )
 
         val Default = ControlLayout(DEFAULT)

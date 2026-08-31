@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.imageResource
@@ -163,13 +164,20 @@ private fun PlacedControl(
     onEditRequested: () -> Unit,
 ) {
     val size = placement.size.dp
+    // The stick occupies more room than its frame: at full deflection half the knob hangs past the
+    // rim, and that has to be inside the composable's own bounds rather than drawn outside them.
+    // Everything is offset by half the footprint, so the frame still centres on the stored point.
+    val footprint = if (placement.id.isStick) size * STICK_FOOTPRINT else size
     Box(
         modifier = Modifier
-            .offset(x = width * placement.x - size / 2, y = height * placement.y - size / 2)
+            .offset(
+                x = width * placement.x - footprint / 2,
+                y = height * placement.y - footprint / 2,
+            )
             .alpha(opacity),
     ) {
         if (placement.id.isStick) {
-            Thumbstick(size = size)
+            Thumbstick(frameSize = size, footprint = footprint)
         } else {
             ControlButton(
                 id = placement.id,
@@ -315,16 +323,20 @@ private fun LatchingButton(id: ControlId, size: Dp, key: Int) {
  */
 @Composable
 private fun ControlFace(id: ControlId, pressed: Boolean, size: Dp) {
-    val textures = texturesFor(id)
-    if (textures != null) {
+    // A whole face, drawn as-is. These carry their own plate and their own pressed state.
+    texturesFor(id)?.let { (normal, down) ->
         Image(
-            painter = pixelPainter(if (pressed) textures.second else textures.first),
+            painter = pixelPainter(if (pressed) down else normal),
             contentDescription = null,
             modifier = Modifier.size(size),
         )
         return
     }
 
+    // Otherwise a plate of ours, with an icon on it where there is one and the control's label
+    // where there is not. Bedrock's small top buttons are this shape: a glyph on a plate, not a
+    // face — which is why they are a separate case rather than differently named art.
+    val icon = iconFor(id)
     Box(
         modifier = Modifier
             .size(size)
@@ -333,12 +345,23 @@ private fun ControlFace(id: ControlId, pressed: Boolean, size: Dp) {
             .border(1.dp, BUTTON_BORDER, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = labelFor(id),
-            color = if (pressed) Color.Black else Color.White,
-            fontSize = LABEL_SIZE,
-            fontWeight = FontWeight.Medium,
-        )
+        if (icon != null) {
+            Image(
+                painter = pixelPainter(icon),
+                contentDescription = null,
+                // Sized to the button rather than to the texture, because these icons are all
+                // different shapes and only their height should agree.
+                modifier = Modifier.size(size * ICON_FRACTION),
+                contentScale = ContentScale.Fit,
+            )
+        } else {
+            Text(
+                text = labelFor(id),
+                color = if (pressed) Color.Black else Color.White,
+                fontSize = LABEL_SIZE,
+                fontWeight = FontWeight.Medium,
+            )
+        }
     }
 }
 
@@ -364,6 +387,23 @@ private fun texturesFor(id: ControlId): Pair<Int, Int>? {
         val pressed = context.resources
             .getIdentifier("${base}_pressed", "drawable", context.packageName)
         normal to (if (pressed == 0) normal else pressed)
+    }
+}
+
+/**
+ * A glyph to draw on a plate, or null when there is none.
+ *
+ * Named `<control>_icon`, as against `<control>` for a whole face. Bedrock draws its small buttons
+ * this way — a glyph over a plate — and its icons are not square, so they cannot simply be stretched
+ * across a button the way its full faces can.
+ */
+@Composable
+private fun iconFor(id: ControlId): Int? {
+    val context = LocalContext.current
+    return remember(id) {
+        context.resources
+            .getIdentifier("${id.name.lowercase()}_icon", "drawable", context.packageName)
+            .takeIf { it != 0 }
     }
 }
 
@@ -537,9 +577,14 @@ private fun CursorArea(modifier: Modifier = Modifier) {
  * from walking, and pushing to the rim sprints — which is where Bedrock puts sprint too.
  */
 @Composable
-private fun Thumbstick(size: Dp) {
+private fun Thumbstick(frameSize: Dp, footprint: Dp) {
     val density = LocalDensity.current
-    val radius = remember(density, size) { with(density) { (size / 2).toPx() } }
+    // Deflection is measured against the frame, not the footprint: the finger travels the frame's
+    // radius, and the margin exists only so the knob has somewhere to hang.
+    val radius = remember(density, frameSize) { with(density) { (frameSize / 2).toPx() } }
+    val inset = remember(density, frameSize, footprint) {
+        with(density) { ((footprint - frameSize) / 2).toPx() }
+    }
     // Held as a fraction of full deflection rather than as pixels, which is what lets the input and
     // the drawing disagree about how far "all the way" is. The finger may travel the whole radius,
     // because that is what the keys are read from; the knob may not, because it has a width and the
@@ -563,7 +608,7 @@ private fun Thumbstick(size: Dp) {
 
     Box(
         modifier = Modifier
-            .size(size)
+            .size(footprint)
             .pointerInput(radius) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -602,34 +647,39 @@ private fun Thumbstick(size: Dp) {
             val frame = pixelPainter(stick.first)
             val knobArt = pixelPainter(stick.second)
             Canvas(modifier = Modifier.fillMaxSize()) {
-                with(frame) { draw(this@Canvas.size) }
-                val extent = this.size.minDimension / KNOB_FRACTION
-                val knobSize = Size(extent, extent)
-                // The knob stops where its own edge meets the frame's, so full deflection puts it
-                // against the rim rather than half outside it — where the canvas would clip it.
-                val travel = this.size.minDimension / 2f - extent / 2f
+                val frameExtent = this.size.minDimension - inset * 2f
+                translate(left = inset, top = inset) {
+                    with(frame) { draw(Size(frameExtent, frameExtent)) }
+                }
+
+                val extent = frameExtent / KNOB_FRACTION
+                // Full deflection puts the knob's centre on the rim, so half of it hangs outside —
+                // which is how a thumbstick reads, and why the canvas is oversized rather than the
+                // travel shortened. Shortening it would also have put the rim, and so sprint, out
+                // of reach.
+                val travel = frameExtent / 2f
                 translate(
                     left = (this.size.width - extent) / 2f + knob.x * travel,
                     top = (this.size.height - extent) / 2f + knob.y * travel,
                 ) {
-                    with(knobArt) { draw(knobSize) }
+                    with(knobArt) { draw(Size(extent, extent)) }
                 }
             }
         } else {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val centre = Offset(this.size.width / 2f, this.size.height / 2f)
-                drawCircle(color = STICK_BASE, radius = this.size.minDimension / 2f, center = centre)
+                val frameRadius = this.size.minDimension / 2f - inset
+                drawCircle(color = STICK_BASE, radius = frameRadius, center = centre)
                 drawCircle(
                     color = BUTTON_BORDER,
-                    radius = this.size.minDimension / 2f,
+                    radius = frameRadius,
                     center = centre,
                     style = Stroke(width = 2f),
                 )
-                val knobRadius = this.size.minDimension / 6f
                 drawCircle(
                     color = STICK_KNOB,
-                    radius = knobRadius,
-                    center = centre + knob * (this.size.minDimension / 2f - knobRadius),
+                    radius = frameRadius / KNOB_FRACTION,
+                    center = centre + knob * frameRadius,
                 )
             }
         }
@@ -810,6 +860,9 @@ private val EDITOR_SELECTED = Color(0xFF7FD4FF)
 private val EDGE_PADDING = 20.dp
 private val GAP = 8.dp
 private val LABEL_SIZE = 13.sp
+
+/** How much of a button an icon drawn on a plate takes up. */
+private const val ICON_FRACTION = 0.55f
 private val SLIDER_WIDTH = 220.dp
 
 /** How far a finger may travel and still count as a tap rather than a look. */
@@ -826,9 +879,17 @@ private const val LOOK_SENSITIVITY = 1.4f
 /** The knob's diameter as a fraction of the frame's, matching how Bedrock's two textures relate. */
 private const val KNOB_FRACTION = 2.4f
 
+/**
+ * How much wider the stick's footprint is than its frame.
+ *
+ * Half a knob on each side, which is exactly what hangs past the rim at full deflection.
+ */
+private const val STICK_FOOTPRINT = 1f + 1f / KNOB_FRACTION
+
 private const val STICK_DEAD_ZONE = 0.28f
 private const val STICK_AXIS_THRESHOLD = 0.38f
 private const val STICK_SPRINT_THRESHOLD = 0.92f
 
 private const val HIDDEN_CONTROL_ALPHA = 0.3f
-private const val DEFAULT_OPACITY = 0.75f
+/** Bedrock's controls sit well back from the world; measured against it, this is about right. */
+private const val DEFAULT_OPACITY = 0.55f
