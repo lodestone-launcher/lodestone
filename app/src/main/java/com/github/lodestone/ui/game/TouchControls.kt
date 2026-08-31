@@ -1,21 +1,26 @@
 package com.github.lodestone.ui.game
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -23,27 +28,38 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.github.lodestone.domain.model.controls.ControlId
+import com.github.lodestone.domain.model.controls.ControlLayout
+import com.github.lodestone.domain.model.controls.ControlPlacement
 import com.github.lodestone.runtime.GlfwBridge
 import com.github.lodestone.runtime.GlfwKeys
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * The on-screen controls drawn over the game.
@@ -51,27 +67,36 @@ import kotlin.math.min
  * Every control resolves to a GLFW key or mouse event, so the game sees exactly what a desktop
  * player's keyboard and mouse would send and nothing Minecraft-side has to change.
  *
- * The layout follows the one Pocket Edition settled on, because it is the one players already know:
- * a thumbstick under the left thumb, jump under the right, and the rest of the screen as the camera.
- * On the world, a tap uses or places and a press-and-hold mines — the two things a mouse does with
- * its buttons, told apart here by how long a finger stays still.
+ * The arrangement is Pocket Edition's, down to which buttons exist and where they start: a stick
+ * under the left thumb, jump under the right, and the rest of the screen as the camera. On the
+ * world a tap uses or places and a press-and-hold mines — the two mouse buttons, told apart by how
+ * long a finger stays still. And as on Bedrock, every one of them can be moved, resized or turned
+ * off; a control scheme that cannot be adjusted fits one hand and no others.
  *
- * What has no counterpart on Bedrock is the mode switch. Java Edition grabs the pointer while you
- * are playing and lets it go whenever a screen is open, and those two states want opposite things
- * from a touchscreen: relative movement and held keys in one, an absolute cursor that can drag an
- * item across a grid in the other. So the overlay is really two overlays, and [GlfwBridge] reports
- * which one the game is asking for.
+ * What has no counterpart on Bedrock is the mode switch. Java grabs the pointer while you are
+ * playing and releases it whenever a screen is open, and those two states want opposite things from
+ * a touchscreen: relative movement and held keys in one, an absolute cursor that can drag a stack
+ * across a grid in the other. So this is really two overlays, and [GlfwBridge] reports which one
+ * the game is asking for.
+ *
+ * The stick is deliberately not analogue, and cannot be. `KeyboardInput.calculateImpulse` takes two
+ * booleans and returns -1, 0 or 1; the movement vector is two of those, normalised. There is no
+ * gamepad path in the client to reach for instead — it calls no GLFW joystick function at all.
+ * Eight directions is the ceiling, and speed varies only by what sprint and sneak do to it.
  */
 @Composable
 fun TouchControls(
+    layout: ControlLayout,
+    editing: Boolean,
+    onLayoutChange: (ControlLayout) -> Unit,
+    onEditingChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     opacity: Float = DEFAULT_OPACITY,
     onOpenMenu: () -> Unit = {},
 ) {
     // Polled rather than pushed: the grab is the game's to change, it changes on the render thread
-    // inside `glfwSetInputMode`, and there is nothing on that path that could call back into
-    // Compose. A tenth of a second is far below the time it takes a player to reach for a button
-    // after a screen opens.
+    // inside `glfwSetInputMode`, and nothing on that path could call back into Compose. A tenth of
+    // a second is far below the time it takes a player to reach for a button after a screen opens.
     val grabbed by produceState(initialValue = true) {
         while (true) {
             value = GlfwBridge.isCursorGrabbed()
@@ -79,111 +104,314 @@ fun TouchControls(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        if (grabbed) {
-            PlayingControls(opacity = opacity, onOpenMenu = onOpenMenu)
-        } else {
-            ScreenControls(opacity = opacity, onOpenMenu = onOpenMenu)
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val width = maxWidth
+        val height = maxHeight
+
+        when {
+            editing -> LayoutEditor(
+                layout = layout,
+                width = width,
+                height = height,
+                onLayoutChange = onLayoutChange,
+                onDone = { onEditingChange(false) },
+            )
+
+            // A screen is open. None of the playing controls are drawn: the game ignores every
+            // movement key while a screen has focus, and they would sit on top of the very slots
+            // the player is reaching for.
+            !grabbed -> {
+                CursorArea(modifier = Modifier.fillMaxSize())
+                layout[ControlId.PAUSE]?.let { pause ->
+                    PlacedControl(
+                        placement = pause,
+                        width = width,
+                        height = height,
+                        opacity = opacity,
+                        onOpenMenu = onOpenMenu,
+                        onEditRequested = { onEditingChange(true) },
+                    )
+                }
+            }
+
+            else -> {
+                // Underneath the buttons, so a drag that starts on one never turns the camera too.
+                CameraArea(modifier = Modifier.fillMaxSize())
+                layout.placements.filter { it.visible }.forEach { placement ->
+                    PlacedControl(
+                        placement = placement,
+                        width = width,
+                        height = height,
+                        opacity = opacity,
+                        onOpenMenu = onOpenMenu,
+                        onEditRequested = { onEditingChange(true) },
+                    )
+                }
+            }
         }
     }
 }
 
-/** The overlay while the game has the pointer: a thumbstick, a camera, and the action buttons. */
+/** Positions one control by its centre, which is what the layout stores. */
 @Composable
-private fun BoxScope.PlayingControls(
+private fun PlacedControl(
+    placement: ControlPlacement,
+    width: Dp,
+    height: Dp,
     opacity: Float,
     onOpenMenu: () -> Unit,
+    onEditRequested: () -> Unit,
 ) {
-    // Underneath everything, so a drag that starts on a button never turns the camera as well.
-    CameraArea(modifier = Modifier.fillMaxSize())
-
-    Thumbstick(
+    val size = placement.size.dp
+    Box(
         modifier = Modifier
-            .align(Alignment.BottomStart)
-            .padding(EDGE_PADDING)
+            .offset(x = width * placement.x - size / 2, y = height * placement.y - size / 2)
             .alpha(opacity),
-    )
-
-    HotbarStrip(
-        modifier = Modifier
-            .align(Alignment.BottomCenter)
-            .padding(bottom = HOTBAR_BOTTOM_PADDING)
-            .alpha(opacity),
-    )
-
-    Row(
-        modifier = Modifier
-            .align(Alignment.BottomEnd)
-            .padding(EDGE_PADDING)
-            .alpha(opacity),
-        horizontalArrangement = Arrangement.spacedBy(GAP),
-        verticalAlignment = Alignment.Bottom,
     ) {
-        RoundHoldButton(
-            label = "☰",
-            diameter = SMALL_BUTTON,
-            onPress = { GlfwBridge.sendKey(GlfwKeys.E, 0, GlfwBridge.Action.PRESS) },
-            onRelease = { GlfwBridge.sendKey(GlfwKeys.E, 0, GlfwBridge.Action.RELEASE) },
-        )
-        // Sneak latches rather than being held. On a keyboard a thumb can rest on shift while the
-        // other hand does everything else; here the same thumb is needed for jump, and Bedrock
-        // latches it for the same reason.
-        RoundToggleButton(
-            label = "▼",
-            diameter = SMALL_BUTTON,
-            key = GlfwKeys.LEFT_SHIFT,
-        )
-        // Jump is the biggest thing on the right, where Bedrock puts it and where a right thumb
-        // rests without moving off the camera.
-        RoundHoldButton(
-            label = "▲",
-            diameter = JUMP_BUTTON,
-            onPress = { GlfwBridge.sendKey(GlfwKeys.SPACE, 0, GlfwBridge.Action.PRESS) },
-            onRelease = { GlfwBridge.sendKey(GlfwKeys.SPACE, 0, GlfwBridge.Action.RELEASE) },
-        )
+        if (placement.id.isStick) {
+            Thumbstick(size = size)
+        } else {
+            ControlButton(
+                id = placement.id,
+                size = size,
+                onOpenMenu = onOpenMenu,
+                onEditRequested = onEditRequested,
+            )
+        }
     }
-
-    // Top left, where Bedrock puts its pause button, and — more to the point — away from the top
-    // right, which is where Minecraft slides its own toasts in and would sit under these.
-    SystemButtons(
-        onOpenMenu = onOpenMenu,
-        modifier = Modifier
-            .align(Alignment.TopStart)
-            .padding(EDGE_PADDING)
-            .alpha(opacity),
-    )
 }
 
 /**
- * The overlay while a screen is open: the whole surface is a cursor.
+ * One button, wired to whatever it stands for.
  *
- * None of the playing controls are drawn. There is nothing for them to do — the game ignores every
- * movement key while a screen has focus — and they would sit on top of the very inventory slots the
- * player is reaching for.
+ * Sneak and sprint latch rather than being held, as they do on Bedrock and for the same reason: the
+ * thumb that would have to hold them is the one that also has to reach jump.
  */
 @Composable
-private fun BoxScope.ScreenControls(
-    opacity: Float,
+private fun ControlButton(
+    id: ControlId,
+    size: Dp,
     onOpenMenu: () -> Unit,
+    onEditRequested: () -> Unit,
 ) {
-    CursorArea(modifier = Modifier.fillMaxSize())
+    when (id) {
+        ControlId.SNEAK -> LatchingButton(id, size, GlfwKeys.LEFT_SHIFT)
+        ControlId.SPRINT -> LatchingButton(id, size, GlfwKeys.LEFT_CONTROL)
 
-    SystemButtons(
-        onOpenMenu = onOpenMenu,
+        ControlId.ATTACK -> HoldButton(
+            id = id,
+            size = size,
+            onPress = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.LEFT, GlfwBridge.Action.PRESS)
+            },
+            onRelease = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.LEFT, GlfwBridge.Action.RELEASE)
+            },
+        )
+
+        // The pause button is also the way into arranging the controls, because it is the one
+        // button that is never part of playing and is always on screen.
+        ControlId.PAUSE -> HoldButton(
+            id = id,
+            size = size,
+            onPress = {},
+            onRelease = onOpenMenu,
+            onLongPress = onEditRequested,
+        )
+
+        else -> {
+            val key = when (id) {
+                ControlId.JUMP -> GlfwKeys.SPACE
+                ControlId.INVENTORY -> GlfwKeys.E
+                ControlId.CHAT -> GlfwKeys.T
+                ControlId.DROP -> GlfwKeys.Q
+                ControlId.DEBUG -> GlfwKeys.F3
+                else -> return
+            }
+            HoldButton(
+                id = id,
+                size = size,
+                onPress = { GlfwBridge.sendKey(key, 0, GlfwBridge.Action.PRESS) },
+                onRelease = { GlfwBridge.sendKey(key, 0, GlfwBridge.Action.RELEASE) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HoldButton(
+    id: ControlId,
+    size: Dp,
+    onPress: () -> Unit,
+    onRelease: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+) {
+    var down by remember { mutableStateOf(false) }
+    Box(
         modifier = Modifier
-            .align(Alignment.TopStart)
-            .padding(EDGE_PADDING)
-            .alpha(opacity),
-    )
+            .size(size)
+            .pointerInput(id) {
+                detectTapGestures(
+                    onLongPress = onLongPress?.let { handler -> { _ -> handler() } },
+                    onPress = {
+                        down = true
+                        onPress()
+                        // The release has to fire even if the finger slides off, or the key would
+                        // stay down for good.
+                        tryAwaitRelease()
+                        down = false
+                        onRelease()
+                    },
+                )
+            },
+    ) {
+        ControlFace(id = id, pressed = down, size = size)
+    }
+}
+
+/**
+ * A button that stays down until it is touched again.
+ *
+ * The key is released on the way out as well as on the second tap: a latch that outlived the screen
+ * it was set on would leave the player crouching with no button left to stand up with.
+ */
+@Composable
+private fun LatchingButton(id: ControlId, size: Dp, key: Int) {
+    var latched by remember { mutableStateOf(false) }
+
+    DisposableEffect(key) {
+        onDispose {
+            if (latched) {
+                GlfwBridge.sendKey(key, 0, GlfwBridge.Action.RELEASE)
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .pointerInput(id) {
+                detectTapGestures(
+                    onTap = {
+                        latched = !latched
+                        GlfwBridge.sendKey(
+                            key,
+                            0,
+                            if (latched) GlfwBridge.Action.PRESS else GlfwBridge.Action.RELEASE,
+                        )
+                    },
+                )
+            },
+    ) {
+        ControlFace(id = id, pressed = latched, size = size)
+    }
+}
+
+/**
+ * What a button looks like.
+ *
+ * A texture where one is installed, and otherwise a plate and a label. Which of those a build gets
+ * is decided by what is in `res/drawable`, not by anything here — see [texturesFor].
+ */
+@Composable
+private fun ControlFace(id: ControlId, pressed: Boolean, size: Dp) {
+    val textures = texturesFor(id)
+    if (textures != null) {
+        Image(
+            painter = pixelPainter(if (pressed) textures.second else textures.first),
+            contentDescription = null,
+            modifier = Modifier.size(size),
+        )
+        return
+    }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (pressed) BUTTON_LATCHED else BUTTON_BACKGROUND)
+            .border(1.dp, BUTTON_BORDER, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = labelFor(id),
+            color = if (pressed) Color.Black else Color.White,
+            fontSize = LABEL_SIZE,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/**
+ * The normal and pressed textures for a control, or null when none are installed.
+ *
+ * Resolved by name at run time rather than through generated `R` constants, so that the drawables
+ * are genuinely optional: a checkout without them compiles and draws plates, and dropping a set in
+ * turns them on. That makes the control artwork something that can be replaced without touching
+ * this file, which is the point — it is meant to be replaced.
+ *
+ * A control's textures are `<name>` and `<name>_pressed`, lowercased from [ControlId].
+ */
+@Composable
+private fun texturesFor(id: ControlId): Pair<Int, Int>? {
+    val context = LocalContext.current
+    return remember(id) {
+        val base = id.name.lowercase()
+        val normal = context.resources.getIdentifier(base, "drawable", context.packageName)
+        if (normal == 0) {
+            return@remember null
+        }
+        val pressed = context.resources
+            .getIdentifier("${base}_pressed", "drawable", context.packageName)
+        normal to (if (pressed == 0) normal else pressed)
+    }
+}
+
+/** The stick's frame and knob, or null when this build carries neither. */
+@Composable
+private fun stickTextures(): Pair<Int, Int>? {
+    val context = LocalContext.current
+    return remember(Unit) {
+        val frame = context.resources
+            .getIdentifier("joystick_frame", "drawable", context.packageName)
+        val knob = context.resources
+            .getIdentifier("joystick_knob", "drawable", context.packageName)
+        if (frame == 0 || knob == 0) null else frame to knob
+    }
+}
+
+private fun labelFor(id: ControlId): String = when (id) {
+    ControlId.STICK -> ""
+    ControlId.JUMP -> "▲"
+    ControlId.SNEAK -> "▼"
+    ControlId.SPRINT -> "»"
+    ControlId.ATTACK -> "✦"
+    ControlId.INVENTORY -> "☰"
+    ControlId.CHAT -> "T"
+    ControlId.DROP -> "Q"
+    ControlId.PAUSE -> "II"
+    ControlId.DEBUG -> "F3"
+}
+
+/**
+ * A painter for one of the reference textures, magnified without smoothing.
+ *
+ * These are 22-pixel sprites blown up several times over, and filtering turns their edges to mush —
+ * which is the thing that makes them read as pixel art in the first place.
+ */
+@Composable
+private fun pixelPainter(id: Int): BitmapPainter {
+    val bitmap = ImageBitmap.imageResource(id)
+    return remember(bitmap) { BitmapPainter(bitmap, filterQuality = FilterQuality.None) }
 }
 
 /**
  * Turns touches into the camera, mining and using.
  *
- * A finger that travels becomes camera movement; one that stays put and is lifted quickly is a use
- * or a place; one that stays put and stays down is a held left button, which is what mining is. The
- * same finger can do two of those in turn — Bedrock lets you keep looking around while you break a
- * block, and so does this.
+ * A finger that travels becomes camera movement; one that stays put and lifts quickly is a use or a
+ * place; one that stays put and stays down is a held left button, which is what mining is. The same
+ * finger can do two of those in turn — Bedrock lets you keep looking while a block breaks, and so
+ * does this.
  */
 @Composable
 private fun CameraArea(modifier: Modifier = Modifier) {
@@ -205,9 +433,8 @@ private fun CameraArea(modifier: Modifier = Modifier) {
                 val downAt = System.currentTimeMillis()
 
                 while (true) {
-                    // Until this gesture has committed to being a look or a mine, the wait is
-                    // bounded: a finger that simply rests is the one input that produces no events
-                    // at all, and it is the one that means "start mining".
+                    // Until this gesture has committed, the wait is bounded: a finger that simply
+                    // rests produces no events at all, and that is the one that means "mine".
                     val event = if (looking || mining) {
                         awaitPointerEvent()
                     } else {
@@ -248,8 +475,8 @@ private fun CameraArea(modifier: Modifier = Modifier) {
                         GlfwBridge.MouseButton.LEFT,
                         GlfwBridge.Action.RELEASE,
                     )
-                    // Lifted before the hold threshold and without travelling: a tap on the world,
-                    // which on Bedrock places a block or uses what is in hand.
+                    // Lifted before the threshold without travelling: a tap on the world, which on
+                    // Bedrock places a block or uses what is in hand.
                     !looking -> {
                         GlfwBridge.sendMouseButton(
                             GlfwBridge.MouseButton.RIGHT,
@@ -270,11 +497,11 @@ private fun CameraArea(modifier: Modifier = Modifier) {
  * Drives the game's own cursor while a screen is open.
  *
  * The button goes down with the finger and up when it lifts, rather than as one click on release,
- * because that is what dragging a stack across an inventory needs — and because a screen that
- * wanted a click rather than a drag cannot tell the difference.
+ * because that is what dragging a stack across an inventory needs — and a screen that wanted a
+ * click rather than a drag cannot tell the difference.
  *
- * Positions go across unscaled: the surface the game renders into is this same window, so a touch
- * at a pixel is a cursor at that pixel.
+ * Positions cross unscaled: the surface the game renders into is this same window, so a touch at a
+ * pixel is a cursor at that pixel.
  */
 @Composable
 private fun CursorArea(modifier: Modifier = Modifier) {
@@ -284,10 +511,7 @@ private fun CursorArea(modifier: Modifier = Modifier) {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 down.consume()
                 GlfwBridge.sendCursorPos(down.position.x, down.position.y)
-                GlfwBridge.sendMouseButton(
-                    GlfwBridge.MouseButton.LEFT,
-                    GlfwBridge.Action.PRESS,
-                )
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.LEFT, GlfwBridge.Action.PRESS)
 
                 while (true) {
                     val event = awaitPointerEvent()
@@ -299,10 +523,7 @@ private fun CursorArea(modifier: Modifier = Modifier) {
                     GlfwBridge.sendCursorPos(change.position.x, change.position.y)
                 }
 
-                GlfwBridge.sendMouseButton(
-                    GlfwBridge.MouseButton.LEFT,
-                    GlfwBridge.Action.RELEASE,
-                )
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.LEFT, GlfwBridge.Action.RELEASE)
             }
         },
     )
@@ -311,14 +532,14 @@ private fun CursorArea(modifier: Modifier = Modifier) {
 /**
  * The movement stick.
  *
- * Eight-way rather than analogue, because the keys it stands in for are: Minecraft has no half-
- * pressed W. The dead zone keeps a thumb resting on the stick from walking, and pushing it to the
- * rim runs — which is where Bedrock puts sprint too, and saves a button.
+ * Eight-way rather than analogue, because the keys it stands in for are: Minecraft's movement
+ * impulse is computed from two booleans and takes three values. The dead zone keeps a resting thumb
+ * from walking, and pushing to the rim sprints — which is where Bedrock puts sprint too.
  */
 @Composable
-private fun Thumbstick(modifier: Modifier = Modifier) {
+private fun Thumbstick(size: Dp) {
     val density = LocalDensity.current
-    val radius = remember(density) { with(density) { (STICK_SIZE / 2).toPx() } }
+    val radius = remember(density, size) { with(density) { (size / 2).toPx() } }
     var knob by remember { mutableStateOf(Offset.Zero) }
     val held = remember { mutableSetOf<Int>() }
 
@@ -337,13 +558,13 @@ private fun Thumbstick(modifier: Modifier = Modifier) {
     }
 
     Box(
-        modifier = modifier
-            .size(STICK_SIZE)
+        modifier = Modifier
+            .size(size)
             .pointerInput(radius) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
-                    val centre = Offset(size.width / 2f, size.height / 2f)
+                    val centre = Offset(this.size.width / 2f, this.size.height / 2f)
 
                     var position = down.position
                     while (true) {
@@ -355,9 +576,7 @@ private fun Thumbstick(modifier: Modifier = Modifier) {
                             offset
                         }
                         knob = clamped
-
-                        val normalised = if (radius > 0f) clamped / radius else Offset.Zero
-                        apply(keysFor(normalised))
+                        apply(keysFor(if (radius > 0f) clamped / radius else Offset.Zero))
 
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -373,20 +592,36 @@ private fun Thumbstick(modifier: Modifier = Modifier) {
                 }
             },
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val centre = Offset(size.width / 2f, size.height / 2f)
-            drawCircle(color = STICK_BASE, radius = size.minDimension / 2f, center = centre)
-            drawCircle(
-                color = BUTTON_BORDER,
-                radius = size.minDimension / 2f,
-                center = centre,
-                style = Stroke(width = 2f),
-            )
-            drawCircle(
-                color = STICK_KNOB,
-                radius = size.minDimension / 6f,
-                center = centre + knob,
-            )
+        val stick = stickTextures()
+        if (stick != null) {
+            val frame = pixelPainter(stick.first)
+            val knobArt = pixelPainter(stick.second)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                with(frame) { draw(this@Canvas.size) }
+                val knobSize = Size(this.size.minDimension / 2.4f, this.size.minDimension / 2.4f)
+                translate(
+                    left = (this.size.width - knobSize.width) / 2f + knob.x,
+                    top = (this.size.height - knobSize.height) / 2f + knob.y,
+                ) {
+                    with(knobArt) { draw(knobSize) }
+                }
+            }
+        } else {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val centre = Offset(this.size.width / 2f, this.size.height / 2f)
+                drawCircle(color = STICK_BASE, radius = this.size.minDimension / 2f, center = centre)
+                drawCircle(
+                    color = BUTTON_BORDER,
+                    radius = this.size.minDimension / 2f,
+                    center = centre,
+                    style = Stroke(width = 2f),
+                )
+                drawCircle(
+                    color = STICK_KNOB,
+                    radius = this.size.minDimension / 6f,
+                    center = centre + knob,
+                )
+            }
         }
     }
 }
@@ -408,8 +643,8 @@ private fun keysFor(normalised: Offset): Set<Int> {
     if (normalised.y > STICK_AXIS_THRESHOLD) keys += GlfwKeys.S
     if (normalised.x < -STICK_AXIS_THRESHOLD) keys += GlfwKeys.A
     if (normalised.x > STICK_AXIS_THRESHOLD) keys += GlfwKeys.D
-    // Pushed to the rim and going forwards: run. Held as a key rather than toggled, so letting go
-    // of the stick stops the sprint with it.
+    // Pushed to the rim and going forwards: run. Held rather than latched, so letting go of the
+    // stick stops the sprint with it.
     if (magnitude > STICK_SPRINT_THRESHOLD && normalised.y < -STICK_AXIS_THRESHOLD) {
         keys += GlfwKeys.LEFT_CONTROL
     }
@@ -417,191 +652,155 @@ private fun keysFor(normalised: Offset): Set<Int> {
 }
 
 /**
- * A strip over the game's own hotbar that scrolls it.
+ * Arranging the controls, as Bedrock's own customisation screen does.
  *
- * Minecraft draws the hotbar itself, centred at the bottom, and while the pointer is grabbed there
- * is no way to click a slot. A mouse wheel is how a desktop player changes slots, so a swipe here
- * sends wheel notches — landing on the one part of the screen where a player would already be
- * reaching to change what is in hand.
+ * Every control is draggable, the selected one can be resized or hidden, and nothing here reaches
+ * the game: while this is open the camera and the buttons are inert, so a player cannot mine a hole
+ * in the floor while moving the jump button off it.
  */
 @Composable
-private fun HotbarStrip(modifier: Modifier = Modifier) {
-    val density = LocalDensity.current
-    val step = remember(density) { with(density) { HOTBAR_STEP.toPx() } }
-
-    Box(
-        modifier = modifier
-            .width(HOTBAR_WIDTH)
-            .height(HOTBAR_HEIGHT)
-            .pointerInput(step) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    down.consume()
-                    var anchor = down.position.x
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        change.consume()
-                        if (!change.pressed) {
-                            break
-                        }
-                        val travelled = change.position.x - anchor
-                        if (abs(travelled) >= step) {
-                            // Right along the hotbar is the next slot, which is a wheel notch down.
-                            val notches = (travelled / step).toInt()
-                            GlfwBridge.sendScroll(0f, -notches.toFloat())
-                            anchor += notches * step
-                        }
-                    }
-                }
-            },
-    )
-}
-
-@Composable
-private fun BoxScope.SystemButtons(
-    onOpenMenu: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun LayoutEditor(
+    layout: ControlLayout,
+    width: Dp,
+    height: Dp,
+    onLayoutChange: (ControlLayout) -> Unit,
+    onDone: () -> Unit,
 ) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(GAP)) {
-        RoundHoldButton(
-            label = "F3",
-            diameter = SMALL_BUTTON,
-            onPress = { GlfwBridge.sendKey(GlfwKeys.F3, 0, GlfwBridge.Action.PRESS) },
-            onRelease = { GlfwBridge.sendKey(GlfwKeys.F3, 0, GlfwBridge.Action.RELEASE) },
-        )
-        RoundHoldButton(
-            label = "T",
-            diameter = SMALL_BUTTON,
-            onPress = { GlfwBridge.sendKey(GlfwKeys.T, 0, GlfwBridge.Action.PRESS) },
-            onRelease = { GlfwBridge.sendKey(GlfwKeys.T, 0, GlfwBridge.Action.RELEASE) },
-        )
-        RoundHoldButton(
-            label = "Esc",
-            diameter = SMALL_BUTTON,
-            onPress = { GlfwBridge.sendKey(GlfwKeys.ESCAPE, 0, GlfwBridge.Action.PRESS) },
-            onRelease = { GlfwBridge.sendKey(GlfwKeys.ESCAPE, 0, GlfwBridge.Action.RELEASE) },
-        )
-        Box(
-            modifier = Modifier
-                .size(SMALL_BUTTON)
-                .clip(CircleShape)
-                .background(BUTTON_BACKGROUND)
-                .border(1.dp, BUTTON_BORDER, CircleShape)
-                .pointerInput(Unit) { detectTapGestures { onOpenMenu() } },
-            contentAlignment = Alignment.Center,
-        ) {
-            // Two bars, as Bedrock's pause button is. Written out rather than taken from a symbol
-            // font: the glyph this used to be rendered as a missing-character box on the device.
-            Text("II", color = Color.White, fontSize = LABEL_SIZE, fontWeight = FontWeight.Bold)
-        }
-    }
-}
+    var selected by remember { mutableStateOf(ControlId.STICK) }
+    val density = LocalDensity.current
+    // The drag handler is keyed on the control's id so that it is not restarted mid-gesture, which
+    // means its lambda closes over the layout as it was when the gesture began. Every delta would
+    // then be applied to the same stale position and only the last one would survive — a drag
+    // across the screen that moves the button a few pixels. This reads the current one instead.
+    val current by rememberUpdatedState(layout)
 
-/**
- * A round button that latches its key down until it is touched again.
- *
- * The key is released on the way out as well as on the second tap: a latch that survived the
- * screen it was set on would leave the player crouching with no button left to un-crouch with.
- */
-@Composable
-private fun RoundToggleButton(label: String, diameter: Dp, key: Int) {
-    var latched by remember { mutableStateOf(false) }
-
-    DisposableEffect(key) {
-        onDispose {
-            if (latched) {
-                GlfwBridge.sendKey(key, 0, GlfwBridge.Action.RELEASE)
+    Box(modifier = Modifier.fillMaxSize().background(EDITOR_SCRIM)) {
+        layout.placements.forEach { placement ->
+            val size = placement.size.dp
+            Box(
+                modifier = Modifier
+                    .offset(
+                        x = width * placement.x - size / 2,
+                        y = height * placement.y - size / 2,
+                    )
+                    .size(size)
+                    .alpha(if (placement.visible) 1f else HIDDEN_CONTROL_ALPHA)
+                    .border(
+                        width = if (placement.id == selected) 2.dp else 1.dp,
+                        color = if (placement.id == selected) EDITOR_SELECTED else EDITOR_OUTLINE,
+                        shape = RoundedCornerShape(6.dp),
+                    )
+                    .pointerInput(placement.id) {
+                        detectDragGestures(
+                            onDragStart = { selected = placement.id },
+                            onDrag = { change, drag ->
+                                change.consume()
+                                // Converted back into fractions immediately, so the layout never
+                                // holds a position in the pixels of the screen it was arranged on.
+                                val dx = with(density) { drag.x.toDp() } / width
+                                val dy = with(density) { drag.y.toDp() } / height
+                                val live = current
+                                val moved = live[placement.id] ?: return@detectDragGestures
+                                onLayoutChange(
+                                    live.with(moved.copy(x = moved.x + dx, y = moved.y + dy)),
+                                )
+                            },
+                        )
+                    }
+                    .pointerInput(placement.id) {
+                        detectTapGestures { selected = placement.id }
+                    },
+            ) {
+                if (placement.id.isStick) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(color = STICK_BASE, radius = this.size.minDimension / 2f)
+                    }
+                } else {
+                    ControlFace(id = placement.id, pressed = false, size = size)
+                }
             }
         }
-    }
 
-    Box(
-        modifier = Modifier
-            .size(diameter)
-            .clip(CircleShape)
-            .background(if (latched) BUTTON_LATCHED else BUTTON_BACKGROUND)
-            .border(1.dp, BUTTON_BORDER, CircleShape)
-            .pointerInput(key) {
-                detectTapGestures(
-                    onTap = {
-                        latched = !latched
-                        GlfwBridge.sendKey(
-                            key,
-                            0,
-                            if (latched) GlfwBridge.Action.PRESS else GlfwBridge.Action.RELEASE,
-                        )
-                    },
-                )
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = LABEL_SIZE,
-            fontWeight = FontWeight.Medium,
+        EditorPanel(
+            layout = layout,
+            selected = selected,
+            onLayoutChange = onLayoutChange,
+            onDone = onDone,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(EDGE_PADDING),
         )
     }
 }
 
-/** A round button that holds its key or mouse button down for as long as it is touched. */
 @Composable
-private fun RoundHoldButton(
-    label: String,
-    diameter: Dp,
-    onPress: () -> Unit,
-    onRelease: () -> Unit,
+private fun EditorPanel(
+    layout: ControlLayout,
+    selected: ControlId,
+    onLayoutChange: (ControlLayout) -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = Modifier
-            .size(diameter)
-            .clip(CircleShape)
-            .background(BUTTON_BACKGROUND)
-            .border(1.dp, BUTTON_BORDER, CircleShape)
-            .pointerInput(label) {
-                detectTapGestures(
-                    onPress = {
-                        onPress()
-                        // The release has to fire even if the finger slides off the button, or the
-                        // key would stay stuck down.
-                        tryAwaitRelease()
-                        onRelease()
-                    },
-                )
-            },
-        contentAlignment = Alignment.Center,
+    val placement = layout[selected] ?: return
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(EDITOR_PANEL)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            text = label,
+            text = selected.name.lowercase().replaceFirstChar(Char::titlecase) +
+                " — ${placement.size.roundToInt()} dp",
             color = Color.White,
             fontSize = LABEL_SIZE,
             fontWeight = FontWeight.Medium,
         )
+        Slider(
+            value = placement.size,
+            onValueChange = { onLayoutChange(layout.with(placement.copy(size = it))) },
+            valueRange = ControlPlacement.MINIMUM_SIZE..ControlPlacement.MAXIMUM_SIZE,
+            modifier = Modifier.width(SLIDER_WIDTH),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(GAP)) {
+            EditorAction(if (placement.visible) "Hide" else "Show") {
+                onLayoutChange(layout.with(placement.copy(visible = !placement.visible)))
+            }
+            EditorAction("Reset all") { onLayoutChange(ControlLayout.Default) }
+            EditorAction("Done", onClick = onDone)
+        }
     }
+}
+
+@Composable
+private fun EditorAction(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        color = Color.White,
+        fontSize = LABEL_SIZE,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(BUTTON_BACKGROUND)
+            .border(1.dp, BUTTON_BORDER, RoundedCornerShape(6.dp))
+            .pointerInput(label) { detectTapGestures { onClick() } }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 
 private val BUTTON_BACKGROUND = Color(0x66000000)
 private val BUTTON_BORDER = Color(0x99FFFFFF)
-private val BUTTON_LATCHED = Color(0x99FFFFFF)
+private val BUTTON_LATCHED = Color(0xCCFFFFFF)
 private val STICK_BASE = Color(0x40000000)
 private val STICK_KNOB = Color(0x99FFFFFF)
+private val EDITOR_SCRIM = Color(0x66000000)
+private val EDITOR_PANEL = Color(0xE6101014)
+private val EDITOR_OUTLINE = Color(0x80FFFFFF)
+private val EDITOR_SELECTED = Color(0xFF7FD4FF)
 
 private val EDGE_PADDING = 20.dp
-private val GAP = 12.dp
+private val GAP = 8.dp
 private val LABEL_SIZE = 13.sp
-
-private val STICK_SIZE = 132.dp
-private val JUMP_BUTTON = 68.dp
-private val SMALL_BUTTON = 44.dp
-
-private val HOTBAR_WIDTH = 260.dp
-private val HOTBAR_HEIGHT = 44.dp
-private val HOTBAR_BOTTOM_PADDING = 4.dp
-
-/** How far a finger travels along the hotbar before it counts as one slot. */
-private val HOTBAR_STEP = 28.dp
+private val SLIDER_WIDTH = 220.dp
 
 /** How far a finger may travel and still count as a tap rather than a look. */
 private val TAP_SLOP = 12.dp
@@ -618,4 +817,5 @@ private const val STICK_DEAD_ZONE = 0.28f
 private const val STICK_AXIS_THRESHOLD = 0.38f
 private const val STICK_SPRINT_THRESHOLD = 0.92f
 
+private const val HIDDEN_CONTROL_ALPHA = 0.3f
 private const val DEFAULT_OPACITY = 0.75f

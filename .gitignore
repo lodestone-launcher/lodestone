@@ -40,3 +40,9 @@ app/src/main/jniLibs/*/libc++_shared.so
 
 # Worktrees an agent session creates for itself; each is a clone of this repository.
 .claude/worktrees/
+
+# Control-button artwork. TouchControls resolves these by name at run time, so a checkout without
+# them compiles and falls back to drawn plates. The set sitting here now is Bedrock's, copied in
+# locally to judge the layout against real artwork before original artwork is made — Mojang's, not
+# ours, and never committed: this app ships no Minecraft content.
+app/src/main/res/drawable-nodpi/

@@ -12,12 +12,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.github.lodestone.data.local.settings.ControlLayoutStore
+import com.github.lodestone.domain.model.controls.ControlLayout
 import com.github.lodestone.domain.model.launch.LaunchRequest
 import com.github.lodestone.domain.model.version.GraphicsBackend
 import com.github.lodestone.runtime.GlfwBridge
@@ -51,11 +57,29 @@ class GameActivity : ComponentActivity() {
         }
         enterImmersiveMode()
 
+        val layoutStore = ControlLayoutStore(File(filesDir, ControlLayoutStore.FILE_NAME))
+
         setContent {
+            // Held here rather than inside the overlay: the arrangement outlives any one screen it
+            // is drawn on, and the store is the game process's to own.
+            var layout by remember { mutableStateOf(layoutStore.load()) }
+            var editing by remember { mutableStateOf(false) }
+
             GameScreen(
                 onSurfaceCreated = { view -> surfaceView = view },
                 onOpenMenu = ::showInGameMenu,
                 onSurfaceReady = ::startGame,
+                layout = layout,
+                editing = editing,
+                onLayoutChange = { layout = it },
+                onEditingChange = { wasEditing ->
+                    editing = wasEditing
+                    // Written when the editor closes rather than on every drag: a drag is hundreds
+                    // of changes, and none of the intermediate ones is a layout anyone chose.
+                    if (!wasEditing) {
+                        layoutStore.save(layout)
+                    }
+                },
             )
         }
     }
@@ -193,6 +217,10 @@ class GameActivity : ComponentActivity() {
 private fun GameScreen(
     onSurfaceCreated: (SurfaceView) -> Unit,
     onOpenMenu: () -> Unit,
+    layout: ControlLayout,
+    editing: Boolean,
+    onLayoutChange: (ControlLayout) -> Unit,
+    onEditingChange: (Boolean) -> Unit,
     onSurfaceReady: () -> Unit = {},
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -207,6 +235,10 @@ private fun GameScreen(
         )
 
         TouchControls(
+            layout = layout,
+            editing = editing,
+            onLayoutChange = onLayoutChange,
+            onEditingChange = onEditingChange,
             modifier = Modifier.fillMaxSize(),
             onOpenMenu = onOpenMenu,
         )
