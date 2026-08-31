@@ -51,7 +51,7 @@ jobs:
             library="$(find app/build/intermediates/cxx -path "*/$abi/liblodestone_glfw.so" | head -1)"
             [ -n "$library" ] || { echo "no shim built for $abi" >&2; exit 1; }
             ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" \
-              runtime/check-glfw-exports.sh --library "$library"
+              runtime/check-lwjgl-exports.sh --module glfw --library "$library"
           done
 
       - uses: actions/upload-artifact@v4

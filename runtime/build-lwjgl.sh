@@ -103,8 +103,23 @@ OPENAL_TAG="1.23.1"
 # The two libraries Minecraft's Vulkan backend compiles its shaders through. Neither has generated
 # JNI code: the bindings reach them through libffi by symbol name, so what matters is that the C
 # API is present and the SONAME is the one LWJGL asks for, not that the build matches a release.
+# Pinned to the release LWJGL built its own bindings against, not to whatever is newest. The
+# manifest names `org.lwjgl:lwjgl-shaderc:3.4.1`, which fixes the *binding* version; the upstream
+# release that binding expects is not named anywhere in the manifest, and has to come from LWJGL.
+#
+# Read it back off LWJGL's own published binary, which is the only statement of it that cannot
+# drift:
+#
+#   unzip -p lwjgl-shaderc-<version>-natives-linux.jar linux/x64/org/lwjgl/shaderc/libshaderc.so \
+#       | strings | grep 'SPIRV-Tools v'
+#
+# For 3.4.1 that reports `SPIRV-Tools v2026.1`, and shaderc pins its SPIRV-Tools through
+# git-sync-deps, so v2026.1 is the matching shaderc. Guessing instead is how this first landed on
+# v2025.2, which predates shaderc_compile_options_set_max_id_bound: the library loaded cleanly and
+# then threw a missing-function NullPointerException four frames below VulkanBackend.createDevice.
+# The entry-point check at the end of this script is what now catches that at build time.
 SHADERC_REPO="https://github.com/google/shaderc.git"
-SHADERC_TAG="v2025.2"
+SHADERC_TAG="v2026.1"
 SPIRV_CROSS_REPO="https://github.com/KhronosGroup/SPIRV-Cross.git"
 SPIRV_CROSS_TAG="vulkan-sdk-1.3.290.0"
 
@@ -323,7 +338,12 @@ for abi in "${ABIS[@]}"; do
     # unqualified — so the platform directory has to be on the include path in its own right
     # rather than reached through a prefix, for the bindings just as much as for core itself.
     jni_flags=(
-        -O2 -fPIC -shared -fvisibility=hidden
+        # NDEBUG because these are release builds of libraries whose assertions are aimed at
+        # whoever integrates them, not at whoever compiles them, and LWJGL's own published natives
+        # define it. Without it the Vulkan Memory Allocator aborts the process when Minecraft
+        # destroys a buffer it deliberately left persistently mapped — a pattern the allocator
+        # supports and only a debug build objects to.
+        -O2 -DNDEBUG -fPIC -shared -fvisibility=hidden
         -DLWJGL_LINUX -D_GNU_SOURCE
         -I"${core}/main/c"
         -I"${core}/main/c/linux"
@@ -475,7 +495,7 @@ for abi in "${ABIS[@]}"; do
         # dropped on its own into the version's natives directory, where a libc++_shared.so
         # dependency would have nothing to resolve against.
         "${TOOLCHAIN}/bin/${triple}${API}-clang++" \
-            -O2 -fPIC -shared -fvisibility=hidden \
+            -O2 -DNDEBUG -fPIC -shared -fvisibility=hidden \
             -DLWJGL_LINUX -D_GNU_SOURCE \
             -static-libstdc++ \
             -I"${core}/main/c" \
@@ -589,6 +609,20 @@ for abi in "${ABIS[@]}"; do
             [[ "${soname}" == "${lib}.so" ]] \
                 || { echo "${lib}.so has SONAME ${soname}, expected ${lib}.so" >&2; exit 1; }
         done
+
+        # The whole entry-point contract, not the two spot checks above. LWJGL resolves each
+        # module's functions in a class initialiser and throws on the first one missing, so a
+        # library one symbol short loads cleanly and then fails deep inside the game — which is how
+        # shaderc v2025.2 got as far as VulkanBackend.createDevice before anyone noticed it
+        # predated shaderc_compile_options_set_max_id_bound.
+        if command -v javap >/dev/null; then
+            "$(dirname "$0")/check-lwjgl-exports.sh" --module shaderc --lwjgl "${LWJGL_VERSION}" \
+                --ndk "${NDK}" --library "${out}/libshaderc_shared.so"
+            "$(dirname "$0")/check-lwjgl-exports.sh" --module spvc --lwjgl "${LWJGL_VERSION}" \
+                --ndk "${NDK}" --library "${out}/libspirv-cross-c-shared.so"
+        else
+            echo "    javap is not on PATH; skipped the shaderc and spvc entry-point check" >&2
+        fi
     fi
     if [[ "${THIRD_PARTY}" == "yes" ]]; then
         for lib in libfreetype libopenal; do

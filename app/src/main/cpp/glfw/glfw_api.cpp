@@ -671,6 +671,18 @@ __attribute__((visibility("default"))) void glfwSetClipboardString(GLFWwindow*, 
 
 DEFINE_CALLBACK_SETTER(glfwSetKeyCallback, keyCallback, KeyCallback)
 DEFINE_CALLBACK_SETTER(glfwSetCharCallback, charCallback, CharCallback)
+// GLFW 3.4's IME extension. LWJGL resolves these seven with the *optional* variant of its symbol
+// lookup, so a shim without them leaves the addresses at zero rather than failing to load — and
+// Minecraft calls three of them while building its window. With LWJGL's checks off that is a jump
+// to address zero on the render thread, which is what it did here: a two-frame tombstone with our
+// window handle in x0 and nothing to say which function was meant.
+//
+// Composition is not wired to Android's input method yet; these keep the registration contract
+// (store the callback, hand back the previous one) so the game gets an answer and the IME simply
+// reports nothing happening.
+DEFINE_CALLBACK_SETTER(glfwSetPreeditCallback, preeditCallback, void)
+DEFINE_CALLBACK_SETTER(glfwSetIMEStatusCallback, imeStatusCallback, void)
+DEFINE_CALLBACK_SETTER(glfwSetPreeditCandidateCallback, preeditCandidateCallback, void)
 DEFINE_CALLBACK_SETTER(glfwSetMouseButtonCallback, mouseButtonCallback, MouseButtonCallback)
 DEFINE_CALLBACK_SETTER(glfwSetCursorPosCallback, cursorPosCallback, CursorPosCallback)
 DEFINE_CALLBACK_SETTER(glfwSetScrollCallback, scrollCallback, ScrollCallback)
@@ -680,6 +692,47 @@ DEFINE_CALLBACK_SETTER(glfwSetWindowFocusCallback, windowFocusCallback, WindowFo
 DEFINE_CALLBACK_SETTER(glfwSetWindowCloseCallback, windowCloseCallback, WindowCloseCallback)
 
 #undef DEFINE_CALLBACK_SETTER
+
+// Where the candidate window would go, in window coordinates. Recorded so that the getter answers
+// with what the game set, which is all GLFW promises; Android places its own candidate window.
+namespace {
+int g_preeditX = 0;
+int g_preeditY = 0;
+int g_preeditWidth = 0;
+int g_preeditHeight = 0;
+} // namespace
+
+__attribute__((visibility("default"))) void glfwSetPreeditCursorRectangle(
+        GLFWwindow*, int x, int y, int width, int height) {
+    g_preeditX = x;
+    g_preeditY = y;
+    g_preeditWidth = width;
+    g_preeditHeight = height;
+}
+
+__attribute__((visibility("default"))) void glfwGetPreeditCursorRectangle(
+        GLFWwindow*, int* x, int* y, int* width, int* height) {
+    if (x != nullptr) *x = g_preeditX;
+    if (y != nullptr) *y = g_preeditY;
+    if (width != nullptr) *width = g_preeditWidth;
+    if (height != nullptr) *height = g_preeditHeight;
+}
+
+/** Nothing is being composed, so there is nothing to discard. */
+__attribute__((visibility("default"))) void glfwResetPreeditText(GLFWwindow*) {}
+
+/**
+ * Null, which GLFW returns for an index with no candidate behind it.
+ *
+ * The count is written first because a caller reads it whether or not it gets a pointer back.
+ */
+__attribute__((visibility("default"))) const unsigned int* glfwGetPreeditCandidate(
+        GLFWwindow*, int, int* textCount) {
+    if (textCount != nullptr) {
+        *textCount = 0;
+    }
+    return nullptr;
+}
 
 __attribute__((visibility("default"))) void* glfwSetErrorCallback(void* callback) {
     void* previous = state().errorCallback;

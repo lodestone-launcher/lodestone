@@ -6,13 +6,27 @@ import java.io.File
 import java.io.InputStream
 
 /**
- * Opens one library out of a packaged LWJGL set, or null when this build does not carry it.
+ * The packaged LWJGL sets, as the installer reads them.
  *
  * An interface rather than a path, because the sets are packaged as assets: they are directories in
  * the APK, not files on disk, and only the ABI the device actually runs is ever opened.
  */
-fun interface LwjglNativesSource {
+interface LwjglNativesSource {
+
+    /** Opens one library out of a packaged set, or null when this build does not carry it. */
     fun open(set: LwjglNativeSet, name: String): InputStream?
+
+    /**
+     * Changes whenever the packaged libraries might have.
+     *
+     * A version's natives are copied out of the APK once and then survive every later launch, so
+     * something has to say that the copies are stale. The set's own version cannot: these
+     * libraries are ours rather than LWJGL's, and a rebuild that fixes one of them — a shaderc
+     * built against a release that actually exports what the bindings resolve, say — is still
+     * LWJGL 3.4.1. Without this, such a fix would ship in an update and never reach the directory
+     * it was meant to fix.
+     */
+    val revision: String
 }
 
 /**
@@ -31,11 +45,18 @@ fun interface LwjglNativesSource {
 object LwjglNativesInstaller {
 
     /**
-     * Records which set the directory holds.
+     * Records what the directory holds.
      *
-     * A version's natives survive across launches and across app updates, so the set that was
-     * installed has to be written down. Comparing file sizes instead would work only as long as no
-     * two builds of the same library ever agreed on a length.
+     * A version's natives survive across launches and across app updates, so what was installed has
+     * to be written down. Comparing file sizes instead would work only as long as no two builds of
+     * the same library ever agreed on a length.
+     *
+     * The marker names every library and the build they came out of, not just the release. Both
+     * have already been needed. A set gains libraries between app versions — 3.4.1 grew the three
+     * the Vulkan backend needs — and a set's libraries get rebuilt without its version moving,
+     * because these are our builds rather than LWJGL's. A marker recording only "3.4.1" calls a
+     * directory installed before either change current, and what that looks like on the way out is
+     * a launch that dies on a library the launcher believes it wrote.
      */
     private const val MARKER = ".lwjgl"
 
@@ -71,9 +92,15 @@ object LwjglNativesInstaller {
         target: File,
         compat2: Boolean,
     ) {
-        val stamp = if (compat2) "${set.version}+lwjgl2" else set.version
+        val stamp = stampFor(set, source, compat2)
         val marker = File(target, MARKER)
-        if (marker.isFile && runCatching(marker::readText).getOrNull() == stamp) {
+        // The marker is believed only as far as the files it names. Mojang's own natives jars
+        // unpack x86-64 libraries into this same directory, so a name being present says nothing
+        // about whose build it is — but a name being absent is proof the install did not finish.
+        if (marker.isFile &&
+            runCatching(marker::readText).getOrNull() == stamp &&
+            set.libraries.all { File(target, it).isFile }
+        ) {
             return
         }
         // Stamped only once every library has landed, so a copy interrupted halfway is redone on
@@ -97,7 +124,24 @@ object LwjglNativesInstaller {
             destination.setExecutable(true, false)
         }
         marker.writeText(stamp)
-        Timber.i("Installed the LWJGL %s natives into %s", stamp, target)
+        Timber.i("Installed the LWJGL %s natives into %s", set.version, target)
+    }
+
+    /**
+     * What a finished install of [set] looks like, as the marker records it.
+     *
+     * The library names are part of it rather than only the release, so that adding one to a set
+     * invalidates every directory installed before it. Written one per line because this file is
+     * read by a person far more often than by the code — it is the first thing worth looking at
+     * when a launch cannot find a library.
+     */
+    private fun stampFor(
+        set: LwjglNativeSet,
+        source: LwjglNativesSource,
+        compat2: Boolean,
+    ): String {
+        val version = if (compat2) "${set.version}+lwjgl2" else set.version
+        return (listOf(version, source.revision) + set.libraries.sorted()).joinToString("\n")
     }
 
     /**

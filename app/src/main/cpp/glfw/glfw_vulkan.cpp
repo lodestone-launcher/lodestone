@@ -79,6 +79,53 @@ PFN_vkGetInstanceProcAddr loader() {
 /** The ANativeWindow the live VkSurfaceKHR was created from, kept alive for as long as it exists. */
 ANativeWindow* g_surfaceWindow = nullptr;
 
+const char* transformName(VkSurfaceTransformFlagBitsKHR transform) {
+    switch (transform) {
+        case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR: return "identity";
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: return "rotate 90";
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return "rotate 180";
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return "rotate 270";
+        default: return "mirrored or unknown";
+    }
+}
+
+/**
+ * Logs what the driver says about the surface just created.
+ *
+ * Worth its place permanently. `currentTransform` is the one piece of Android's window system that
+ * a renderer written for a desktop does not expect to vary: on a phone held sideways the surface is
+ * reported rotated, and a backend that copies `currentTransform` into `preTransform` — which is the
+ * right thing everywhere it is always identity — is promising to have rotated its own output. Its
+ * value, beside the extent, is what tells that story in a log rather than in a screenshot.
+ */
+void describeSurface(PFN_vkGetInstanceProcAddr get, VkInstance instance, VkSurfaceKHR surface) {
+    auto enumerateDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        get(instance, "vkEnumeratePhysicalDevices"));
+    auto getCapabilities = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(
+        get(instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+    if (enumerateDevices == nullptr || getCapabilities == nullptr) {
+        return;
+    }
+
+    uint32_t count = 0;
+    if (enumerateDevices(instance, &count, nullptr) != VK_SUCCESS || count == 0) {
+        return;
+    }
+    std::vector<VkPhysicalDevice> devices(count);
+    if (enumerateDevices(instance, &count, devices.data()) != VK_SUCCESS) {
+        return;
+    }
+
+    VkSurfaceCapabilitiesKHR capabilities{};
+    if (getCapabilities(devices[0], surface, &capabilities) != VK_SUCCESS) {
+        return;
+    }
+    LOGI("surface capabilities: extent %ux%u, currentTransform %s, %u..%u images",
+         capabilities.currentExtent.width, capabilities.currentExtent.height,
+         transformName(capabilities.currentTransform),
+         capabilities.minImageCount, capabilities.maxImageCount);
+}
+
 } // namespace
 
 extern "C" {
@@ -223,6 +270,7 @@ __attribute__((visibility("default"))) VkResult glfwCreateWindowSurface(
     g_surfaceWindow = window;
     LOGI("Vulkan surface created on a %dx%d Android window",
          ANativeWindow_getWidth(window), ANativeWindow_getHeight(window));
+    describeSurface(get, instance, *surface);
     return VK_SUCCESS;
 }
 

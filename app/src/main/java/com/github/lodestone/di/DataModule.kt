@@ -7,6 +7,7 @@ import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.data.local.files.Lwjgl2CompatInstaller
 import com.github.lodestone.data.local.files.Lwjgl2CompatSource
 import com.github.lodestone.data.local.files.LwjglNativesSource
+import com.github.lodestone.domain.model.version.LwjglNativeSet
 import com.github.lodestone.data.local.settings.SettingsStore
 import com.github.lodestone.data.remote.download.DownloadEngine
 import com.github.lodestone.data.repository.RuntimeInstaller
@@ -19,6 +20,7 @@ import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.ktor.client.HttpClient
 import java.io.File
+import java.io.InputStream
 
 @ContributesTo(AppScope::class)
 interface DataModule {
@@ -85,12 +87,25 @@ interface DataModule {
      */
     @Provides
     @SingleIn(AppScope::class)
-    fun provideLwjglNatives(context: Context): LwjglNativesSource =
-        LwjglNativesSource { set, name ->
+    fun provideLwjglNatives(context: Context): LwjglNativesSource = object : LwjglNativesSource {
+
+        override fun open(set: LwjglNativeSet, name: String): InputStream? =
             Build.SUPPORTED_ABIS.firstNotNullOfOrNull { abi ->
                 runCatching { context.assets.open("${set.assetPath}/$abi/$name") }.getOrNull()
             }
-        }
+
+        /**
+         * When this APK was installed.
+         *
+         * These libraries are assets, so the only thing that can change them is the APK being
+         * replaced — which is exactly what this timestamp records, across an update and across a
+         * developer reinstalling the same version code. A version code alone would not: it does
+         * not have to move for the packaged libraries to.
+         */
+        override val revision: String = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+        }.getOrElse { "unknown" }
+    }
 
     /** The LWJGL 2 compatibility layer, built from `app/src/lwjgl2` and packaged as one asset. */
     @Provides

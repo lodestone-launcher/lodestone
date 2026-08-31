@@ -145,8 +145,12 @@ class JavaRuntimeManager(private val files: GameFiles) {
         // a version with no Vulkan renderer never loads them, and the properties are inert.
         add("-Dorg.lwjgl.shaderc.libname=${File(nativesDirectory, LwjglNativeSet.SHADERC).absolutePath}")
         add("-Dorg.lwjgl.spvc.libname=${File(nativesDirectory, LwjglNativeSet.SPVC).absolutePath}")
-        // LWJGL probes for a debug console and stack traces it cannot get here.
-        add("-Dorg.lwjgl.util.NoChecks=true")
+        // Checks are deliberately left on. Disabling them removes the guard LWJGL puts in front of
+        // every function pointer, and against a shim standing in for GLFW that guard is the
+        // difference between a named "function not supported" exception and a jump to address
+        // zero. That is not hypothetical: the IME entry points, which LWJGL resolves optionally
+        // and so leaves null when absent, took the render thread down with a two-frame tombstone
+        // that named no function at all. The per-call cost is a null test next to a driver call.
     }
 
     /**

@@ -16,8 +16,15 @@ class LwjglNativesInstallerTest {
     val temporaryFolder = TemporaryFolder()
 
     /** Stands in for the packaged assets, labelling each library with the set it came from. */
-    private fun source(missing: Set<String> = emptySet()) = LwjglNativesSource { set, name ->
-        if (name in missing) null else ByteArrayInputStream("${set.version}/$name".toByteArray())
+    private fun source(
+        missing: Set<String> = emptySet(),
+        revision: String = "build-1",
+        content: (LwjglNativeSet, String) -> String = { set, name -> "${set.version}/$name" },
+    ) = object : LwjglNativesSource {
+        override fun open(set: LwjglNativeSet, name: String) =
+            if (name in missing) null else ByteArrayInputStream(content(set, name).toByteArray())
+
+        override val revision: String = revision
     }
 
     private fun natives(): File = temporaryFolder.newFolder("natives")
@@ -111,5 +118,46 @@ class LwjglNativesInstallerTest {
 
         LwjglNativesInstaller.install(LwjglNativeSet.V3_4_1, source(), apk, target)
         assertTrue(LwjglNativeSet.LIBRARIES.all { File(target, it).isFile })
+    }
+
+    @Test
+    fun `a rebuilt set replaces libraries the previous build of the same version installed`() {
+        val target = natives()
+        val apk = apkLibraries()
+        LwjglNativesInstaller.install(
+            LwjglNativeSet.V3_4_1,
+            source(revision = "build-1") { _, name -> "old/$name" },
+            apk,
+            target,
+        )
+        assertEquals("old/liblwjgl.so", File(target, "liblwjgl.so").readText())
+
+        // Same LWJGL release, same library names, different build of them — which is what shipping
+        // a fix to one of our own cross-compiled libraries looks like. The version cannot say that
+        // anything changed, so the APK the assets came out of has to.
+        LwjglNativesInstaller.install(
+            LwjglNativeSet.V3_4_1,
+            source(revision = "build-2") { _, name -> "new/$name" },
+            apk,
+            target,
+        )
+        for (name in LwjglNativeSet.V3_4_1.libraries) {
+            assertEquals("new/$name", File(target, name).readText())
+        }
+    }
+
+    @Test
+    fun `a set that gained libraries is reinstalled rather than reported as current`() {
+        val target = natives()
+        val apk = apkLibraries()
+        LwjglNativesInstaller.install(LwjglNativeSet.V3_4_1, source(), apk, target)
+
+        // Delete one of the Vulkan libraries to stand for a directory installed before the set
+        // grew them. The marker still matches, so only checking the files catches this.
+        val vulkan = File(target, LwjglNativeSet.VULKAN_LIBRARIES.first())
+        assertTrue(vulkan.delete())
+
+        LwjglNativesInstaller.install(LwjglNativeSet.V3_4_1, source(), apk, target)
+        assertTrue(vulkan.isFile)
     }
 }

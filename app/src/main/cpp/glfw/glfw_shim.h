@@ -144,6 +144,11 @@ struct WindowState {
     // --- Callbacks, set from the game's main thread before the loop starts ----------------------
     void* keyCallback = nullptr;
     void* charCallback = nullptr;
+    // GLFW 3.4's IME extension. Held rather than used: registration has to give the game back
+    // whichever callback it replaced, and Android composition is not routed here yet.
+    void* preeditCallback = nullptr;
+    void* imeStatusCallback = nullptr;
+    void* preeditCandidateCallback = nullptr;
     void* mouseButtonCallback = nullptr;
     void* cursorPosCallback = nullptr;
     void* scrollCallback = nullptr;
