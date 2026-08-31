@@ -43,3 +43,12 @@ target_include_directories(lodestone_glfw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # time so that a device without one reaches `glfwVulkanSupported` returning false — and the game's
 # own OpenGL fallback — rather than failing to load the shim at all.
 target_link_libraries(lodestone_glfw EGL GLESv3 android log)
+
+# Android's Vulkan loader with pre-rotation normalised away, for a renderer written where surfaces
+# are never rotated. Keeps default visibility for `vkGetInstanceProcAddr`, which is the one symbol
+# LWJGL resolves by name before going through it for everything else.
+add_library(lodestone_vulkan SHARED vulkan/vulkan_interpose.cpp)
+target_include_directories(lodestone_vulkan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Not linked against Vulkan: the real loader is opened at run time, so a device without one reaches
+# a logged failure rather than a library that will not load.
+target_link_libraries(lodestone_vulkan dl log)

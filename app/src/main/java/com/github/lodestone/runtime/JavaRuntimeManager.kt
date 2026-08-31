@@ -134,11 +134,17 @@ class JavaRuntimeManager(private val files: GameFiles) {
         // jemalloc is not cross-compiled: LWJGL falls back to the platform allocator, and bionic's
         // is a scudo/jemalloc hybrid already.
         add("-Dorg.lwjgl.system.allocator=system")
-        // Android's Vulkan loader is `libvulkan.so`. LWJGL looks for `libvulkan.so.1`, the
-        // versioned SONAME Linux distributions ship, finds nothing, and reports the backend as
-        // unavailable — which the game accepts quietly and answers by falling back to OpenGL. The
-        // loader is a system library, so this is a name and not a path.
-        add("-Dorg.lwjgl.vulkan.libname=libvulkan.so")
+        // Vulkan reaches the driver through our own loader rather than Android's directly. It
+        // forwards everything and answers one question differently: a surface's rotation, which
+        // Minecraft passes straight into its swapchain the way a desktop renderer can, and which on
+        // a landscape activity would otherwise present every frame turned on its side.
+        //
+        // Named by path, and only when it is packaged. Falling back to `libvulkan.so` rather than
+        // to LWJGL's own default matters: LWJGL looks for the versioned `libvulkan.so.1` a Linux
+        // distribution ships, finds nothing on Android, and reports the backend as unavailable —
+        // which the game accepts quietly by falling back to OpenGL.
+        val vulkanLoader = File(shimDirectory, VULKAN_LOADER).takeIf(File::isFile)
+        add("-Dorg.lwjgl.vulkan.libname=${vulkanLoader?.absolutePath ?: "libvulkan.so"}")
         // The two shader libraries the Vulkan backend compiles through, named where they were
         // installed. Both keep the file names their own builds produce rather than the ones LWJGL
         // looks for, so they have to be pointed at rather than found. Emitted for every launch:
@@ -203,6 +209,11 @@ class JavaRuntimeManager(private val files: GameFiles) {
             "jre/lib/$arch/server",
             "jre/lib/$arch/jli",
         ).map { File(root, it) }
+    }
+
+    private companion object {
+        /** Android's Vulkan loader, wrapped so that surface rotation is normalised away. */
+        const val VULKAN_LOADER = "liblodestone_vulkan.so"
     }
 
     private fun abiDirectory(): String =
