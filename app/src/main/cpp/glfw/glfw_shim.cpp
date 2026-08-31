@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <jni.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -18,37 +19,12 @@ void* g_layer = nullptr;
 bool g_selected = false;
 
 /**
- * Puts the environment a candidate reads into place before anything opens it.
+ * Puts the environment gl4es reads into place before it is opened.
  *
- * Both drivers work this out once, as they come up, so nothing here can be deferred. Setting them
- * per candidate rather than baking them in at build time keeps one binary working across vendors.
+ * It works this out once, as it comes up, so nothing here can be deferred. Set at run time rather
+ * than baked in at build time so that one binary keeps working across vendors.
  */
-void applyEnvironment(bool desktopGl) {
-    if (desktopGl) {
-        // Zink is the only Gallium driver built, but the loader still probes for a hardware driver
-        // by name first and would find none.
-        setenv("GALLIUM_DRIVER", "zink", 1);
-        setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
-        // Zink advertises whatever the Vulkan driver underneath can support, which it works out
-        // lazily; the overrides stop Mesa capping the profile below what Minecraft asks for.
-        setenv("MESA_GL_VERSION_OVERRIDE", "4.6COMPAT", 1);
-        setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 1);
-        setenv("GALLIUM_THREAD", "0", 1);
-        // Zink renders into the window's own gralloc buffer, which it has to import as a dma-buf,
-        // and that import is where the vendor drivers fall down rather than at context creation.
-        // Measured on an Adreno 720: pointed at the Qualcomm blob instead of Turnip, Zink comes up
-        // and reports GL 4.6, the game runs, and every frame logs "failed to create DRI image from
-        // FD" and presents an untouched buffer — a black screen behind a healthy frame loop, which
-        // is the worst way for this to fail. The blob does advertise the dma-buf and modifier
-        // extensions, so what breaks is the import itself, not their absence.
-        //
-        // Turnip imports these buffers correctly, so it is shipped and pointed at. Where Turnip has
-        // no entry for the GPU it declines at eglInitialize, which is loud, early, and something
-        // selectRenderer can still act on.
-        setenv("ZINK_VULKAN_LIBRARY", "libvulkan_freedreno.so", 1);
-        return;
-    }
-
+void applyEnvironment() {
     // gl4es reads these to find the drivers it forwards to.
     setenv("LIBGL_GLES", "libGLESv2.so", 1);
     setenv("LIBGL_EGL", "libEGL.so", 1);
@@ -72,16 +48,16 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates) {
     g_selected = true;
 
     if (candidates.empty()) {
-        initialiseEgl(nullptr, false);
+        // A Vulkan launch. The game brings up its own device and presents to the window itself, so
+        // there is deliberately no EGL here for it to trip over.
         return -1;
     }
 
     for (size_t index = 0; index < candidates.size(); ++index) {
         const RendererCandidate& candidate = candidates[index];
-        const bool desktopGl = !candidate.eglLibrary.empty();
-        applyEnvironment(desktopGl);
+        applyEnvironment();
 
-        if (!initialiseEgl(candidate.eglLibrary.c_str(), desktopGl)) {
+        if (!initialiseEgl()) {
             LOGE("renderer %s did not come up; trying the next", candidate.id.c_str());
             shutdownEgl();
             continue;
@@ -109,6 +85,22 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates) {
 void* translationLayer() {
     std::lock_guard<std::mutex> lock(g_layerMutex);
     return g_layer;
+}
+
+ANativeWindow* acquireWindow(int timeoutMillis) {
+    WindowState& s = state();
+    std::unique_lock<std::mutex> lock(s.surfaceMutex);
+    if (s.window == nullptr) {
+        s.surfaceChanged.wait_for(lock, std::chrono::milliseconds(timeoutMillis),
+                                  [&s] { return s.window != nullptr; });
+    }
+    if (s.window == nullptr) {
+        return nullptr;
+    }
+    // The caller keeps this past the lock, and the UI thread is free to replace the publication in
+    // the meantime, so it leaves with a reference of its own rather than a borrowed pointer.
+    ANativeWindow_acquire(s.window);
+    return s.window;
 }
 
 void postEvent(const Event& event) {
@@ -147,8 +139,7 @@ void recordMouseButton(int button, int action) {
 extern "C" {
 
 JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSelectRenderer(
-        JNIEnv* env, jclass, jobjectArray ids, jobjectArray layerPaths,
-        jobjectArray eglLibraries) {
+        JNIEnv* env, jclass, jobjectArray ids, jobjectArray layerPaths) {
     // Copied out of the JVM up front, because bringing a renderer up runs driver code that can take
     // its time, and holding pinned string bodies across that is what `GetStringUTFChars` asks not
     // to be done.
@@ -168,7 +159,7 @@ JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSelect
     const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
     candidates.reserve(static_cast<size_t>(count));
     for (jsize index = 0; index < count; ++index) {
-        candidates.push_back({read(ids, index), read(layerPaths, index), read(eglLibraries, index)});
+        candidates.push_back({read(ids, index), read(layerPaths, index)});
     }
 
     return lodestone::glfw::selectRenderer(candidates);
@@ -187,11 +178,11 @@ JNIEXPORT void JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSetSur
 
     {
         std::lock_guard<std::mutex> lock(s.surfaceMutex);
-        if (s.pendingWindow != nullptr && s.pendingWindow != window) {
-            ANativeWindow_release(s.pendingWindow);
+        if (s.window != nullptr) {
+            ANativeWindow_release(s.window);
         }
-        s.pendingWindow = window;
-        s.surfaceDirty = true;
+        s.window = window;
+        ++s.windowRevision;
     }
     s.surfaceChanged.notify_all();
 

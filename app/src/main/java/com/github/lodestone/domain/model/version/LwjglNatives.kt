@@ -9,13 +9,24 @@ package com.github.lodestone.domain.model.version
  * at the first `GLFWErrorCallback.create`. Lodestone therefore ships one set per LWJGL release the
  * supported versions pin, and [forVersion] decides which one a manifest gets.
  */
-enum class LwjglNativeSet(val version: String) {
+enum class LwjglNativeSet(val version: String, val servesVulkanBackend: Boolean = false) {
     V3_3_3("3.3.3"),
-    V3_4_1("3.4.1"),
+    V3_4_1("3.4.1", servesVulkanBackend = true),
     ;
 
     /** Where this set sits in the APK, above the per-ABI directory. */
     val assetPath: String get() = "$ASSET_ROOT/$version"
+
+    /**
+     * Every library this set is packaged with.
+     *
+     * Sets that can serve Minecraft's Vulkan backend carry three more. They are listed per set
+     * rather than globally because a set that does not carry them is not incomplete — the game it
+     * serves has no Vulkan renderer to load them — and the installer treats a library it cannot
+     * find as a broken build.
+     */
+    val libraries: List<String>
+        get() = if (servesVulkanBackend) LIBRARIES + VULKAN_LIBRARIES else LIBRARIES
 
     companion object {
         /** The asset directory the sets are packaged under, one subdirectory per version. */
@@ -56,6 +67,36 @@ enum class LwjglNativeSet(val version: String) {
             "liblwjgl_stb.so",
             "liblwjgl_tinyfd.so",
         )
+
+        /**
+         * What Minecraft's Vulkan backend adds on top.
+         *
+         * `liblwjgl_vma.so` is generated JNI like the four above, and version-coupled with them.
+         * The other two are not: shaderc and SPIRV-Cross are upstream projects the bindings reach
+         * through libffi by symbol name, and they are packaged per set only because the sets that
+         * need them are the sets that carry them.
+         *
+         * Vulkan itself is absent by design — it is a system library on Android, and the launcher
+         * points LWJGL at `libvulkan.so` rather than shipping one.
+         */
+        val VULKAN_LIBRARIES = listOf(
+            "liblwjgl_vma.so",
+            SHADERC,
+            SPVC,
+        )
+
+        /**
+         * shaderc and SPIRV-Cross keep the file names their own builds produce.
+         *
+         * LWJGL looks for plain `shaderc` and `spirv-cross`, but CMake writes each library's
+         * SONAME from its target name and appends its own `-Wl,-soname` after anything the build
+         * passes, so a renamed file would disagree with the name Android's linker records it
+         * under. The launcher points `org.lwjgl.shaderc.libname` and `org.lwjgl.spvc.libname` at
+         * these instead, which is the same mechanism the GLFW shim and the GL layer already use.
+         */
+        const val SHADERC = "libshaderc_shared.so"
+
+        const val SPVC = "libspirv-cross-c-shared.so"
 
         /**
          * The set to serve a version that asks for [version], or null when nothing here can.

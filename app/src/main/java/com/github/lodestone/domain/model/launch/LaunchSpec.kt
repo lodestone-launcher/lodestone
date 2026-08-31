@@ -1,5 +1,6 @@
 package com.github.lodestone.domain.model.launch
 
+import com.github.lodestone.domain.model.version.GraphicsBackend
 import java.io.File
 
 /**
@@ -25,6 +26,22 @@ data class LaunchSpec(
      * has actually come up on this device's driver, which is far too late to go back and pick again.
      */
     val renderers: List<RendererCandidate>,
+    /**
+     * Which backend the game itself will drive.
+     *
+     * Carried rather than inferred from [renderers] being empty, because the two mean different
+     * things: an empty list on the OpenGL path means no layer was packaged, which is a failure,
+     * and on the Vulkan path means there was never meant to be one.
+     */
+    val graphicsBackend: GraphicsBackend,
+    /**
+     * The library LWJGL's own OpenGL bootstrap loads, or null when this build packages none.
+     *
+     * Separate from [renderers] because it is not a rendering choice: the game loads its native
+     * libraries as one list and fails the launch over any of them, so something has to answer for
+     * OpenGL even on a launch that will never make a GL call.
+     */
+    val openglLibrary: File?,
     /** Directories appended to `LD_LIBRARY_PATH` before the VM starts. */
     val libraryPath: List<File>,
     val environment: Map<String, String>,
@@ -62,8 +79,6 @@ data class RendererCandidate(
     val renderer: Renderer,
     /** The desktop-GL translation layer to open. */
     val layer: File,
-    /** The EGL the layer is driven through, or null for Android's. */
-    val eglLibrary: File?,
 )
 
 /**
@@ -74,18 +89,25 @@ data class RendererCandidate(
  * natively and which is the fastest path when the version offers it.
  */
 enum class Renderer(val id: String, val label: String, val description: String) {
-    /** Try each translation layer in turn and keep the first that comes up. */
+    /** Native Vulkan where the version can, the OpenGL translation layer where it cannot. */
     AUTO(
         id = "auto",
         label = "Automatic",
-        description = "Zink where the driver supports it, OpenGL ES translation otherwise.",
+        description = "The game's own Vulkan renderer where the version has one, OpenGL translation otherwise.",
     ),
 
-    /** Translate desktop GL onto Vulkan via Mesa's Zink. */
-    ZINK(
-        id = "zink",
-        label = "Zink",
-        description = "Desktop OpenGL 4.6 on Vulkan. Needed for 1.17 and later; not every GPU can run it.",
+    /**
+     * Hand the game's own Vulkan renderer straight to the device driver.
+     *
+     * Nothing is translated on this path. Minecraft 26.2 ships a Vulkan backend, Android exposes
+     * Vulkan on every device this app installs on, and the shim's only job is to hand it a surface
+     * for the activity's window. It is both the fastest path and the only one whose output is the
+     * game's own rendering rather than our reinterpretation of it.
+     */
+    VULKAN(
+        id = "vulkan",
+        label = "Native Vulkan",
+        description = "The game's own Vulkan renderer, with no translation. Needs a version that ships one.",
     ),
 
     /** Translate desktop GL onto OpenGL ES. */
@@ -93,57 +115,33 @@ enum class Renderer(val id: String, val label: String, val description: String) 
         id = "gl4es",
         label = "OpenGL ES translation",
         description = "Desktop OpenGL 2.1 on the device's own GL ES driver. Works nearly everywhere, but only suits 1.16 and earlier.",
-    ),
-
-    /** Hand the game's own Vulkan renderer straight to the device driver. */
-    VULKAN(
-        id = "vulkan",
-        label = "Native Vulkan",
-        description = "The game's own Vulkan renderer, with no translation. Not wired up yet.",
     );
 
+    /** Whether this choice renders through the game's own Vulkan backend rather than a layer. */
+    val isVulkan: Boolean get() = this == VULKAN
+
     /**
-     * The renderers to try, best first.
+     * The translation layers to try, best first, for a launch that is not using Vulkan.
      *
-     * Only [AUTO] chains, and it prefers Zink because gl4es reports OpenGL 2.1 and cannot serve the
-     * 3.2 core profile 1.17 and later ask for. An explicit choice is honoured exactly: someone who
-     * has picked a renderer to see how it behaves is not helped by quietly being given another one.
+     * Only [AUTO] chains, and on the OpenGL side there is one layer to chain to. An explicit choice
+     * is honoured exactly: someone who has picked a renderer to see how it behaves is not helped by
+     * quietly being given another one.
      */
     val chain: List<Renderer>
         get() = when (this) {
-            AUTO -> listOf(ZINK, GL4ES)
+            AUTO -> listOf(GL4ES)
+            VULKAN -> emptyList()
             else -> listOf(this)
         }
 
     /** The translation layer library, or null when the game talks to the driver itself. */
     val libraryName: String?
         get() = when (this) {
-            ZINK -> ZINK_LIBRARY
             GL4ES -> GL4ES_LIBRARY
             AUTO, VULKAN -> null
         }
 
-    /**
-     * The EGL implementation the layer must be driven through, or null for Android's.
-     *
-     * Zink's GL entry points only work on a context Mesa's own EGL created. gl4es forwards to the
-     * device's GL ES driver and wants Android's, which the shim is linked against already.
-     */
-    val eglLibraryName: String?
-        get() = if (this == ZINK) ZINK_EGL_LIBRARY else null
-
     private companion object {
-        /** Mesa builds Zink into a plain `libGL.so`, beside the `libgallium_dri.so` it loads. */
-        const val ZINK_LIBRARY = "libGL.so"
-
-        /**
-         * Mesa's EGL, staged under a name of its own.
-         *
-         * Its SONAME is still `libEGL.so`, and packaged under that name it would sit ahead of
-         * Android's on the app's library search path — so anything resolving the system EGL by
-         * `DT_NEEDED`, this shim included, would silently get Mesa's instead.
-         */
-        const val ZINK_EGL_LIBRARY = "libEGL_zink.so"
         const val GL4ES_LIBRARY = "libgl4es.so"
     }
 }

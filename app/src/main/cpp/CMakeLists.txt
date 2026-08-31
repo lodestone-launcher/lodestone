@@ -31,15 +31,15 @@ target_link_libraries(lodestone_compat log)
 # when the runtime's own libraries are relocated later.
 target_link_options(lodestone_compat PRIVATE -Wl,-z,global)
 
-# Replaces the `libhardware.so` Mesa's own build stubs out. Built here rather than staged from the
-# Zink output because the stub Mesa ships crashes its EGL on a device where the module is absent.
-add_library(hardware SHARED mesa/hardware_stub.cpp)
-
 # Stands in for GLFW. LWJGL resolves these symbols by name, so unlike everything else here the
 # library keeps default visibility for its glfw* exports.
 add_library(lodestone_glfw SHARED
     glfw/glfw_api.cpp
     glfw/glfw_shim.cpp
+    glfw/glfw_vulkan.cpp
 )
 target_include_directories(lodestone_glfw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Vulkan is deliberately absent from this list. The shim resolves the loader with `dlopen` at run
+# time so that a device without one reaches `glfwVulkanSupported` returning false — and the game's
+# own OpenGL fallback — rather than failing to load the shim at all.
 target_link_libraries(lodestone_glfw EGL GLESv3 android log)

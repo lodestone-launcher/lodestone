@@ -1,6 +1,7 @@
 package com.github.lodestone.domain.model.launch
 
 import com.github.lodestone.common.LodestoneJson
+import com.github.lodestone.domain.model.version.GraphicsBackend
 import kotlinx.serialization.Serializable
 import java.io.File
 
@@ -17,7 +18,6 @@ data class RendererChoice(
     /** The [Renderer]'s id, carried so the log names what was tried rather than a bare path. */
     val id: String,
     val layerPath: String,
-    val eglLibraryPath: String? = null,
 )
 
 @Serializable
@@ -35,8 +35,23 @@ data class LaunchRequest(
      * Empty when there is no layer to open at all.
      */
     val renderers: List<RendererChoice> = emptyList(),
+    /**
+     * Which backend the game will drive, as [GraphicsBackend.name].
+     *
+     * The activity needs this before the VM starts, and needs it as more than "are there
+     * renderers": a Vulkan launch must not have EGL brought up underneath it, and an OpenGL launch
+     * with nothing packaged must not start at all.
+     */
+    val graphicsBackend: String = GraphicsBackend.OPENGL.name,
+    /** The library LWJGL's OpenGL bootstrap loads, whichever backend actually renders. */
+    val openglLibraryPath: String? = null,
     val environment: Map<String, String>,
 ) {
+    /** [graphicsBackend] as the enum, falling back to OpenGL for a request this build cannot read. */
+    val backend: GraphicsBackend
+        get() = GraphicsBackend.entries.firstOrNull { it.name == graphicsBackend }
+            ?: GraphicsBackend.OPENGL
+
     fun writeTo(file: File) {
         file.parentFile?.mkdirs()
         file.writeText(LodestoneJson.encodeToString(serializer(), this))
@@ -50,11 +65,12 @@ data class LaunchRequest(
             gameArgs = spec.gameArgs,
             libjvmPath = spec.libjvm.absolutePath,
             gameDirectory = spec.gameDirectory.absolutePath,
+            graphicsBackend = spec.graphicsBackend.name,
+            openglLibraryPath = spec.openglLibrary?.absolutePath,
             renderers = spec.renderers.map { candidate ->
                 RendererChoice(
                     id = candidate.renderer.id,
                     layerPath = candidate.layer.absolutePath,
-                    eglLibraryPath = candidate.eglLibrary?.absolutePath,
                 )
             },
             environment = spec.environment,

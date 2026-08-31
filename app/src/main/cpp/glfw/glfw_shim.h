@@ -85,12 +85,28 @@ struct WindowState {
     std::atomic_bool shouldClose{false};
 
     // --- Surface ownership -------------------------------------------------------------------
-    // The Android UI thread publishes a surface here; the render thread picks it up on its next
-    // swap. The two never touch EGL at the same time.
+    // The Android UI thread publishes the window here and the render thread reads it. Which
+    // graphics API consumes it is not this layer's business: EGL binds a window surface to it,
+    // and Vulkan hands it to `vkCreateAndroidSurfaceKHR`. Both take a reference of their own,
+    // because either may outlive the publication the UI thread later replaces.
+    //
+    // `windowRevision` counts publications rather than flagging one, so a consumer can tell "the
+    // window I am holding is still the current one" from "there is a new one to pick up" without
+    // the UI thread having to know who is listening.
     std::mutex surfaceMutex;
     std::condition_variable surfaceChanged;
-    ANativeWindow* pendingWindow = nullptr;
-    bool surfaceDirty = false;
+    /** The current window, holding one reference owned by this field. Null while detached. */
+    ANativeWindow* window = nullptr;
+    std::uint64_t windowRevision = 0;
+
+    /**
+     * Which graphics API the game asked `glfwCreateWindow` for.
+     *
+     * Minecraft's Vulkan backend sets `GLFW_NO_API`, which on a real GLFW means "create no context
+     * and leave presentation to me". Here it means the same thing, and it is the switch that keeps
+     * the shim from bringing EGL up underneath a game that is about to drive Vulkan itself.
+     */
+    std::atomic_int clientApi{GLFW_OPENGL_API};
 
     // --- EGL, owned exclusively by the render thread -------------------------------------------
     EGLDisplay display = EGL_NO_DISPLAY;
@@ -99,7 +115,10 @@ struct WindowState {
     EGLSurface placeholder = EGL_NO_SURFACE;
     EGLContext context = EGL_NO_CONTEXT;
     EGLConfig config = nullptr;
+    /** EGL's own reference to [window], acquired when a surface is bound to it. */
     ANativeWindow* nativeWindow = nullptr;
+    /** The publication [nativeWindow] came from, so a repeat bind can be skipped. */
+    std::uint64_t boundRevision = 0;
 
     std::atomic_int width{1280};
     std::atomic_int height{720};
@@ -141,17 +160,14 @@ WindowState& state();
 void postEvent(const Event& event);
 
 /**
- * One renderer the shim can bring up: a desktop-GL translation layer and the EGL that drives it.
+ * One desktop-GL translation layer the shim can bring up over Android's EGL.
  *
- * gl4es rewrites desktop GL onto the device's own GL ES driver, so it wants Android's EGL and an ES
- * context — which is what an empty [eglLibrary] selects, since the shim links against it already.
- * Zink is a Mesa driver: its GL entry points only work on a context that Mesa's own EGL created,
- * and that EGL is a different library. Neither can be chosen at link time.
+ * Only reached on the OpenGL path. A Vulkan launch passes no candidates at all: the game creates
+ * its own device and surface, and the shim never brings EGL up.
  */
 struct RendererCandidate {
     std::string id;
     std::string layerPath;
-    std::string eglLibrary;
 };
 
 /**
@@ -178,14 +194,26 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates);
 void* translationLayer();
 
 /**
- * Brings up EGL from [eglLibrary], or Android's own when it is null or empty.
+ * Brings up Android's EGL with a GL ES 3 context.
  *
  * Implemented beside the rest of the EGL plumbing in glfw_api.cpp, and only meant for
  * [selectRenderer] to call.
  */
-bool initialiseEgl(const char* eglLibrary, bool desktopGl);
+bool initialiseEgl();
 
 /** Undoes [initialiseEgl] completely, so that another candidate can be tried on a clean slate. */
 void shutdownEgl();
+
+/**
+ * Waits up to [timeoutMillis] for a window to be published and returns a reference to it.
+ *
+ * The caller owns the returned reference and must release it. Null means the wait ran out with the
+ * activity still holding no surface.
+ *
+ * This exists for the Vulkan path, which — unlike EGL — has nowhere to park a context while the
+ * window is away: `vkCreateAndroidSurfaceKHR` needs a real window at the moment the game asks for
+ * its surface, and the game asks once, early, on its own schedule.
+ */
+ANativeWindow* acquireWindow(int timeoutMillis);
 
 } // namespace lodestone::glfw

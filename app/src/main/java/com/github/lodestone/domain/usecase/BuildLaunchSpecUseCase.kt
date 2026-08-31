@@ -8,12 +8,15 @@ import com.github.lodestone.data.local.files.LwjglNativesSource
 import com.github.lodestone.domain.model.account.MinecraftAccount
 import com.github.lodestone.domain.model.launch.LaunchOptions
 import com.github.lodestone.domain.model.launch.LaunchSpec
+import com.github.lodestone.domain.model.launch.Renderer
+import com.github.lodestone.domain.model.version.GraphicsBackend
 import com.github.lodestone.domain.model.version.LWJGL2_COMPAT_COORDINATE
 import com.github.lodestone.domain.model.version.LaunchEnvironment
 import com.github.lodestone.domain.model.version.LwjglSelection
 import com.github.lodestone.domain.model.version.ResolvedVersion
 import com.github.lodestone.domain.model.version.isSupersededByLwjgl2Compat
 import com.github.lodestone.domain.model.version.lwjglSelection
+import com.github.lodestone.domain.model.version.supportsVulkanBackend
 import com.github.lodestone.runtime.JavaRuntimeManager
 import timber.log.Timber
 import java.io.File
@@ -124,7 +127,27 @@ class BuildLaunchSpecUseCase(
         )
 
         val javaHome = runtimes.runtimeRoot(feature)
-        val renderers = runtimes.rendererCandidates(nativeLibraryDir, options.renderer)
+        // Which backend the game itself will drive. Vulkan is the game's own renderer talking to
+        // the device driver with nothing in between, so it is preferred wherever the version has
+        // one; everything older has only the OpenGL path, and reaches it through a translation
+        // layer. An explicit choice of a Vulkan launch on a version that cannot do it would leave
+        // the game with no renderer at all, so it falls back rather than failing.
+        val backend = when {
+            !version.supportsVulkanBackend -> GraphicsBackend.OPENGL
+            options.renderer == Renderer.GL4ES -> GraphicsBackend.OPENGL
+            else -> GraphicsBackend.VULKAN
+        }
+        if (options.renderer.isVulkan && backend != GraphicsBackend.VULKAN) {
+            Timber.w("%s has no Vulkan renderer; falling back to OpenGL", version.id)
+        }
+
+        // Empty on the Vulkan path, and that emptiness is the instruction: the shim brings up no
+        // EGL and opens no layer, because the game is about to create its own device and present
+        // to the window itself.
+        val renderers = when (backend) {
+            GraphicsBackend.VULKAN -> emptyList()
+            GraphicsBackend.OPENGL -> runtimes.rendererCandidates(nativeLibraryDir, options.renderer)
+        }
         val jvmArgs = buildList {
             // The `java` launcher derives java.home from its own location and hands it to the VM.
             // An embedder calling JNI_CreateJavaVM gets no such help, and without it HotSpot cannot
@@ -151,7 +174,16 @@ class BuildLaunchSpecUseCase(
             addAll(argumentBuilder.buildJvmArgs(version, environment, paths, options))
             addAll(runtimes.lwjglProperties(nativesDirectory, nativeLibraryDir))
         }
-        val gameArgs = argumentBuilder.buildGameArgs(version, environment, paths, account, options)
+        val gameArgs = buildList {
+            addAll(argumentBuilder.buildGameArgs(version, environment, paths, account, options))
+            // Only ever emitted for a version whose Main declares the option. joptsimple rejects an
+            // argument it does not know outright, so passing this to anything older would turn a
+            // renderer preference into a launch that never starts.
+            if (version.supportsVulkanBackend) {
+                add("--graphicsBackend")
+                add(backend.argument)
+            }
+        }
 
         File(files.root, "tmp").mkdirs()
 
@@ -166,6 +198,8 @@ class BuildLaunchSpecUseCase(
                 gameDirectory = files.root,
                 nativesDirectory = nativesDirectory,
                 renderers = renderers,
+                graphicsBackend = backend,
+                openglLibrary = runtimes.openglLibrary(nativeLibraryDir),
                 libraryPath = listOf(nativesDirectory, nativeLibraryDir),
                 environment = runtimes.environmentFor(feature, nativesDirectory),
             ),

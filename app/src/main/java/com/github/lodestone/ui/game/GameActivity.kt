@@ -19,6 +19,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.github.lodestone.domain.model.launch.LaunchRequest
+import com.github.lodestone.domain.model.version.GraphicsBackend
 import com.github.lodestone.runtime.GlfwBridge
 import com.github.lodestone.runtime.JvmBridge
 import timber.log.Timber
@@ -91,21 +92,44 @@ class GameActivity : ComponentActivity() {
         // Settled here rather than when the spec was built, because whether a renderer works is only
         // answered by bringing its EGL up on this device's driver — and that has to happen in this
         // process, before the VM it will serve exists.
-        val renderer = GlfwBridge.selectRenderer(request.renderers)
-        if (renderer == null && request.renderers.isNotEmpty()) {
-            Timber.e(
-                "No renderer came up; tried %s",
-                request.renderers.joinToString { it.id },
-            )
-        } else if (renderer != null) {
-            Timber.i("Rendering through %s", renderer.id)
+        // On the Vulkan path nothing is selected here at all. The game creates its own device and
+        // asks the shim only for a surface, so bringing EGL up would put a GL context on this
+        // thread that nothing will ever use and that the driver has to keep alive regardless.
+        val renderer = when (request.backend) {
+            GraphicsBackend.VULKAN -> {
+                Timber.i("Rendering through the game's own Vulkan backend")
+                null
+            }
+
+            GraphicsBackend.OPENGL -> GlfwBridge.selectRenderer(request.renderers).also { chosen ->
+                if (chosen == null) {
+                    Timber.e(
+                        "No renderer came up; tried %s",
+                        request.renderers.joinToString { it.id }.ifEmpty { "nothing" },
+                    )
+                } else {
+                    Timber.i("Rendering through %s", chosen.id)
+                }
+            }
         }
 
         val jvmArgs = buildList {
             addAll(request.jvmArgs)
-            // The same path the shim already opened, so LWJGL's own dlopen finds the library loaded
-            // rather than running its constructors a second time on the render thread.
-            renderer?.let { add("-Dorg.lwjgl.opengl.libname=${it.layerPath}") }
+            // Whichever backend renders, LWJGL still has to be able to load *an* OpenGL library:
+            // Minecraft bootstraps its natives as one list, OpenGL included, and turns a library
+            // it cannot open into a crash report. Left to itself LWJGL looks for the `libGL.so.1`
+            // a Linux distribution ships, which Android does not have.
+            //
+            // On the OpenGL path this is the layer the shim has already opened, named by the same
+            // path so the linker recognises it as the library it loaded rather than as a second
+            // copy with its own constructors to run. On the Vulkan path nothing has been opened
+            // and nothing will call it, so the packaged layer is named without being brought up.
+            val opengl = renderer?.layerPath ?: request.openglLibraryPath
+            if (opengl != null) {
+                add("-Dorg.lwjgl.opengl.libname=$opengl")
+            } else {
+                Timber.w("No OpenGL library is packaged; LWJGL's own bootstrap will fail")
+            }
         }
 
         Timber.i("Launching %s via %s", request.versionId, request.libjvmPath)

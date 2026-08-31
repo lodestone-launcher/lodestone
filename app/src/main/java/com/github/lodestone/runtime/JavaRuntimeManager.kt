@@ -4,6 +4,7 @@ import com.github.lodestone.data.local.files.GameFiles
 import com.github.lodestone.domain.model.launch.Renderer
 import com.github.lodestone.domain.model.launch.RendererCandidate
 import com.github.lodestone.domain.model.version.JavaVersionRequirement
+import com.github.lodestone.domain.model.version.LwjglNativeSet
 import timber.log.Timber
 import java.io.File
 
@@ -133,6 +134,17 @@ class JavaRuntimeManager(private val files: GameFiles) {
         // jemalloc is not cross-compiled: LWJGL falls back to the platform allocator, and bionic's
         // is a scudo/jemalloc hybrid already.
         add("-Dorg.lwjgl.system.allocator=system")
+        // Android's Vulkan loader is `libvulkan.so`. LWJGL looks for `libvulkan.so.1`, the
+        // versioned SONAME Linux distributions ship, finds nothing, and reports the backend as
+        // unavailable — which the game accepts quietly and answers by falling back to OpenGL. The
+        // loader is a system library, so this is a name and not a path.
+        add("-Dorg.lwjgl.vulkan.libname=libvulkan.so")
+        // The two shader libraries the Vulkan backend compiles through, named where they were
+        // installed. Both keep the file names their own builds produce rather than the ones LWJGL
+        // looks for, so they have to be pointed at rather than found. Emitted for every launch:
+        // a version with no Vulkan renderer never loads them, and the properties are inert.
+        add("-Dorg.lwjgl.shaderc.libname=${File(nativesDirectory, LwjglNativeSet.SHADERC).absolutePath}")
+        add("-Dorg.lwjgl.spvc.libname=${File(nativesDirectory, LwjglNativeSet.SPVC).absolutePath}")
         // LWJGL probes for a debug console and stack traces it cannot get here.
         add("-Dorg.lwjgl.util.NoChecks=true")
     }
@@ -141,23 +153,33 @@ class JavaRuntimeManager(private val files: GameFiles) {
      * The renderers [renderer] asks for that are actually packaged, best first.
      *
      * Resolved against the APK's native library directory rather than the version's natives, so
-     * that adding Zink's libraries to the build is enough to make it selectable. Being packaged is
-     * only the first hurdle: whether a renderer *works* is settled later, when the shim tries to
-     * bring its EGL up on this device's driver.
+     * that packaging a layer is enough to make it selectable. Being packaged is only the first
+     * hurdle: whether a renderer *works* is settled later, when the shim tries to bring its EGL up
+     * on this device's driver. A Vulkan launch chains to nothing and lands here as an empty list.
      */
+    /**
+     * The OpenGL library LWJGL loads while bootstrapping, whichever backend the game will drive.
+     *
+     * Minecraft loads its native libraries as one unconditional list, OpenGL included, and a
+     * library that will not load throws a `ReportedException` that ends the launch. On the Vulkan
+     * path nothing renders through this — the game never makes a GL call — but `GL.create` still
+     * has to find something, and left to itself it looks for the `libGL.so.1` a Linux distribution
+     * ships and Android does not have.
+     *
+     * gl4es answers rather than the system `libGLESv2.so`, because it is this project's OpenGL: if
+     * anything ever does reach a GL entry point here, it should reach the implementation the
+     * OpenGL path would have used, not one with different semantics behind the same names.
+     */
+    fun openglLibrary(shimDirectory: File): File? =
+        File(shimDirectory, Renderer.GL4ES.libraryName!!).takeIf(File::isFile)
+
     fun rendererCandidates(shimDirectory: File, renderer: Renderer): List<RendererCandidate> =
         renderer.chain.mapNotNull { candidate ->
             val layer = candidate.libraryName?.let { File(shimDirectory, it) } ?: return@mapNotNull null
             if (!layer.isFile) {
                 return@mapNotNull null
             }
-            RendererCandidate(
-                renderer = candidate,
-                layer = layer,
-                eglLibrary = candidate.eglLibraryName
-                    ?.let { File(shimDirectory, it) }
-                    ?.takeIf(File::isFile),
-            )
+            RendererCandidate(renderer = candidate, layer = layer)
         }
 
     /**

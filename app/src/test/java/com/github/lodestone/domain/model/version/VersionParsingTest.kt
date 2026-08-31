@@ -331,4 +331,43 @@ class VersionParsingTest {
         val ALL_FIXTURES =
             listOf("a1.1.2_01", "1.6.4", "1.7.10", "1.16.5", "1.17.1", "1.21.4", "26.2")
     }
+
+    @Test
+    fun `the vulkan backend is recognised from the bindings a manifest pins`() = runTest {
+        // 26.2 is the release that added com.mojang.blaze3d.vulkan, and the first to pin
+        // org.lwjgl:lwjgl-vulkan. On Android that is the difference between the game talking to the
+        // vendor driver directly and going through a desktop-GL translation layer.
+        assertTrue(resolve("26.2").supportsVulkanBackend)
+    }
+
+    @Test
+    fun `versions without a vulkan renderer are not offered one`() = runTest {
+        // Every one of these predates the backend. Passing --graphicsBackend to any of them would
+        // not merely be ignored: joptsimple rejects an option it does not declare, so the launch
+        // would fail before the game started.
+        for (id in listOf("1.21.4", "1.17.1", "1.16.5", "1.7.10", "1.6.4", "a1.1.2_01")) {
+            assertFalse("$id must not be offered the Vulkan backend", resolve(id).supportsVulkanBackend)
+        }
+    }
+
+    @Test
+    fun `the lwjgl set serving a vulkan version carries the libraries that backend needs`() = runTest {
+        val selection = resolve("26.2").lwjglSelection(android)
+        val set = assertIs<LwjglSelection.Packaged>(selection).set
+        assertTrue("the set 26.2 lands on must serve Vulkan", set.servesVulkanBackend)
+        // vma is generated JNI and coupled to the release; the other two are the shader compiler
+        // and the reflection library the backend hands its GLSL to.
+        assertTrue(set.libraries.containsAll(LwjglNativeSet.VULKAN_LIBRARIES))
+
+        // A version with no Vulkan renderer must not drag them in: the installer treats a library
+        // it cannot find as a broken build and abandons the whole set.
+        val older = assertIs<LwjglSelection.Packaged>(resolve("1.21.4").lwjglSelection(android)).set
+        assertFalse(older.servesVulkanBackend)
+        assertEquals(LwjglNativeSet.LIBRARIES, older.libraries)
+    }
+
+    private inline fun <reified T> assertIs(value: Any?): T {
+        assertTrue("expected ${T::class.simpleName} but was $value", value is T)
+        return value as T
+    }
 }

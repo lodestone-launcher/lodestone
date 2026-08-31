@@ -79,7 +79,7 @@ object LwjglNativesInstaller {
         // Stamped only once every library has landed, so a copy interrupted halfway is redone on
         // the next launch rather than left half-applied behind a marker that claims otherwise.
         marker.delete()
-        for (name in LwjglNativeSet.LIBRARIES) {
+        for (name in set.libraries) {
             val asset = if (compat2 && name == OPENGL) LwjglNativeSet.COMPAT2_OPENGL else name
             val opened = source.open(set, asset)
             if (opened == null) {

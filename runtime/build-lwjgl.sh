@@ -18,6 +18,15 @@
 #   lwjgl-freetype     libfreetype.so                -   FreeType upstream, via CMake.
 #   lwjgl-openal       libopenal.so                  -   OpenAL Soft upstream, via CMake.
 #   lwjgl-glfw         libglfw.so                    -   not built: our own shim stands in for it.
+#   lwjgl-vma          liblwjgl_vma.so           2 + 1   stubs plus the header-only allocator.
+#   lwjgl-shaderc      libshaderc.so                 -   google/shaderc upstream, via CMake.
+#   lwjgl-spvc         libspirv-cross.so             -   SPIRV-Cross upstream, via CMake.
+#
+# Those last two keep upstream's own file names here — libshaderc_shared.so and
+# libspirv-cross-c-shared.so — rather than the ones LWJGL looks for by default, so that each
+# file agrees with the SONAME the loader records it under. The launcher points
+# `org.lwjgl.shaderc.libname` and `org.lwjgl.spvc.libname` at them.
+#   lwjgl-vulkan       -                             -   nothing to build; Android has a loader.
 #   lwjgl-jemalloc     libjemalloc.so                -   not built, see below.
 #   com.mojang:jtracy  libjtracy-jni-linux.so        -   not built, see below.
 #
@@ -29,6 +38,15 @@
 # libffi by symbol name, with no generated code and no version coupling, so one build of each
 # serves every set; `--third-party no` skips them when adding a set.
 #
+# The last four are what Minecraft 26.2's Vulkan backend needs, and they are built only for the
+# sets that serve a version carrying one (`--vulkan`, which defaults on from 3.4). vma divides like
+# the first group — generated stubs, coupled to its release — while shaderc and spvc divide like
+# FreeType and OpenAL, reached through libffi by symbol name. lwjgl-vulkan is the exception that
+# needs nothing at all: its natives jar carries only MoltenVK for macOS, and everywhere else the
+# bindings open the system loader. On Android that loader is `libvulkan.so`, where LWJGL looks for
+# the versioned `libvulkan.so.1` a Linux distribution ships, so the launcher sets
+# `-Dorg.lwjgl.vulkan.libname` rather than anything being built here.
+#
 # jemalloc is skipped because `MemoryManage.getInstance` catches the failure to instantiate
 # `JEmallocAllocator` and falls back to the stdlib allocator; the launcher also asks for that
 # outright. jtracy is skipped because `TracyClient.load` is reached only from the `--tracy`
@@ -38,6 +56,7 @@
 #
 #   -Dorg.lwjgl.glfw.libname=<natives>/liblodestone_glfw.so
 #   -Dorg.lwjgl.opengl.libname=<natives>/libgl4es.so
+#   -Dorg.lwjgl.vulkan.libname=libvulkan.so
 #   -Dorg.lwjgl.system.allocator=system
 #
 # `core` links against libffi, which LWJGL does not vendor: it ships only `ffitarget.h` per
@@ -54,7 +73,8 @@
 # `.dynsym`, which is the table JNI resolves through, untouched.
 #
 # Usage: build-lwjgl.sh [--version 3.3.3] [--abi arm64-v8a] [--output <dir>] [--ndk <path>]
-#                       [--third-party yes|no] [--lwjgl2 yes|no] [--libffi <tag>]
+#                       [--third-party yes|no] [--lwjgl2 yes|no] [--vulkan yes|no|auto]
+#                       [--libffi <tag>]
 set -euo pipefail
 
 LWJGL_VERSION="3.3.3"
@@ -62,6 +82,7 @@ ABIS=()
 OUTPUT=""
 THIRD_PARTY="yes"
 LWJGL2="no"
+VULKAN="auto"
 # Kept in step with the `relocate` call in app/build.gradle.kts by
 # LwjglRelocationTest, which reads the prefix back out of both files.
 LWJGL2_PACKAGE="com.github.lodestone.lwjgl3"
@@ -79,6 +100,13 @@ FREETYPE_REPO="https://github.com/freetype/freetype.git"
 FREETYPE_TAG="VER-2-13-2"
 OPENAL_REPO="https://github.com/kcat/openal-soft.git"
 OPENAL_TAG="1.23.1"
+# The two libraries Minecraft's Vulkan backend compiles its shaders through. Neither has generated
+# JNI code: the bindings reach them through libffi by symbol name, so what matters is that the C
+# API is present and the SONAME is the one LWJGL asks for, not that the build matches a release.
+SHADERC_REPO="https://github.com/google/shaderc.git"
+SHADERC_TAG="v2025.2"
+SPIRV_CROSS_REPO="https://github.com/KhronosGroup/SPIRV-Cross.git"
+SPIRV_CROSS_TAG="vulkan-sdk-1.3.290.0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -86,6 +114,7 @@ while [[ $# -gt 0 ]]; do
         --abi) ABIS+=("$2"); shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
         --third-party) THIRD_PARTY="$2"; shift 2 ;;
+        --vulkan) VULKAN="$2"; shift 2 ;;
         --lwjgl2) LWJGL2="$2"; shift 2 ;;
         --libffi) LIBFFI_TAG="$2"; shift 2 ;;
         --ndk) NDK="$2"; shift 2 ;;
@@ -101,6 +130,16 @@ fi
 # Defaulted after parsing so that the version reaches the path: two sets written to one directory
 # would leave whichever ran last standing in for both.
 OUTPUT="${OUTPUT:-$(pwd)/out/lwjgl/${LWJGL_VERSION}}"
+
+# Minecraft's Vulkan backend arrived with LWJGL 3.4, and only a set that carries vma, shaderc and
+# spvc can serve it. Older sets are left alone: building three more libraries for a version whose
+# game has no Vulkan renderer to use them would only make the set bigger.
+if [[ "${VULKAN}" == "auto" ]]; then
+    case "${LWJGL_VERSION}" in
+        3.[0-3].*) VULKAN="no" ;;
+        *) VULKAN="yes" ;;
+    esac
+fi
 
 # core's generated `LibFFI.c` calls whatever libffi the release was generated against, so the
 # checkout has to track it: 3.4.0's notes record the move to libffi 3.5.2, which is where
@@ -153,6 +192,21 @@ OPENAL_SRC="${WORK}/openal-soft"
 if [[ "${THIRD_PARTY}" == "yes" && ! -d "${OPENAL_SRC}" ]]; then
     echo "==> Cloning OpenAL Soft ${OPENAL_TAG}"
     git clone --depth 1 --branch "${OPENAL_TAG}" "${OPENAL_REPO}" "${OPENAL_SRC}"
+fi
+
+SHADERC_SRC="${WORK}/shaderc"
+if [[ "${VULKAN}" == "yes" && ! -d "${SHADERC_SRC}" ]]; then
+    echo "==> Cloning shaderc ${SHADERC_TAG}"
+    git clone --depth 1 --branch "${SHADERC_TAG}" "${SHADERC_REPO}" "${SHADERC_SRC}"
+    # shaderc keeps glslang and SPIRV-Tools out of tree and pins them by commit here rather than as
+    # submodules; this is the only supported way to get the revisions it compiles against.
+    (cd "${SHADERC_SRC}" && ./utils/git-sync-deps)
+fi
+
+SPIRV_CROSS_SRC="${WORK}/SPIRV-Cross"
+if [[ "${VULKAN}" == "yes" && ! -d "${SPIRV_CROSS_SRC}" ]]; then
+    echo "==> Cloning SPIRV-Cross ${SPIRV_CROSS_TAG}"
+    git clone --depth 1 --branch "${SPIRV_CROSS_TAG}" "${SPIRV_CROSS_REPO}" "${SPIRV_CROSS_SRC}"
 fi
 
 triple_for() {
@@ -402,6 +456,81 @@ for abi in "${ABIS[@]}"; do
     fi
 
     # ----------------------------------------------------------------------------------------
+    # The Vulkan backend
+    # ----------------------------------------------------------------------------------------
+    # Minecraft 26.2 renders through its own Vulkan backend, which on Android is the only path that
+    # reaches the GPU without a translation layer in the way. It needs three libraries beyond the
+    # set above, and they divide the same way everything else here does: vma has generated JNI
+    # stubs and is version-coupled, while shaderc and spvc are upstream projects the bindings reach
+    # through libffi by symbol name.
+    #
+    # Vulkan itself is not built or shipped. It is a system library on every Android device, and the
+    # launcher points `org.lwjgl.vulkan.libname` at the name Android uses — `libvulkan.so`, where
+    # LWJGL would otherwise look for the versioned `libvulkan.so.1` that Linux distributions ship.
+    if [[ "${VULKAN}" == "yes" ]]; then
+        echo "==> Building LWJGL vma for ${abi}"
+        vma="${LWJGL_SRC}/modules/lwjgl/vma/src"
+        # C++ rather than C: the Vulkan Memory Allocator is a C++ header-only library, and the
+        # generated bindings include its implementation. Static libc++ because this library is
+        # dropped on its own into the version's natives directory, where a libc++_shared.so
+        # dependency would have nothing to resolve against.
+        "${TOOLCHAIN}/bin/${triple}${API}-clang++" \
+            -O2 -fPIC -shared -fvisibility=hidden \
+            -DLWJGL_LINUX -D_GNU_SOURCE \
+            -static-libstdc++ \
+            -I"${core}/main/c" \
+            -I"${core}/main/c/linux" \
+            -I"${core}/generated/c" \
+            -I"${vma}/main/c" \
+            "${vma}/generated/c/org_lwjgl_util_vma_LibVma.cpp" \
+            "${vma}/generated/c/org_lwjgl_util_vma_Vma.cpp" \
+            -ldl -o "${out}/liblwjgl_vma.so"
+
+        vulkan_cmake=(
+            -G Ninja
+            -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DANDROID_ABI="${abi}"
+            -DANDROID_PLATFORM="android-${API}"
+            -DANDROID_STL=c++_static
+            -DCMAKE_BUILD_TYPE=Release
+        )
+
+        echo "==> Building shaderc for ${abi}"
+        shaderc_build="${WORK}/shaderc-${abi}"
+        # The tests and the command-line tools are host programs; cross-compiling them would need a
+        # target that can run them, and nothing here calls them. NV extensions are left out for the
+        # same reason Minecraft does not use them.
+        cmake -S "${SHADERC_SRC}" -B "${shaderc_build}" "${vulkan_cmake[@]}" \
+            -DSHADERC_SKIP_TESTS=ON \
+            -DSHADERC_SKIP_EXAMPLES=ON \
+            -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
+            -DSHADERC_ENABLE_SHARED_CRT=ON \
+            -DSPIRV_SKIP_EXECUTABLES=ON \
+            -DSPIRV_SKIP_TESTS=ON \
+            -DENABLE_GLSLANG_BINARIES=OFF \
+            -DBUILD_SHARED_LIBS=OFF
+        cmake --build "${shaderc_build}" --target shaderc_shared
+        # Copied under upstream's own name rather than the one LWJGL looks for by default.
+        # CMake writes the SONAME from the target name and appends its own -Wl,-soname after
+        # anything the caller passes, so renaming the file would leave it disagreeing with the
+        # SONAME the linker records it under. The launcher sets `org.lwjgl.shaderc.libname` instead.
+        cp "${shaderc_build}/libshaderc/libshaderc_shared.so" "${out}/libshaderc_shared.so"
+
+        echo "==> Building SPIRV-Cross for ${abi}"
+        spvc_build="${WORK}/SPIRV-Cross-${abi}"
+        # Only the C API is bound, and it is the only one with a stable ABI; the C++ interface is
+        # explicitly not guaranteed between releases.
+        cmake -S "${SPIRV_CROSS_SRC}" -B "${spvc_build}" "${vulkan_cmake[@]}" \
+            -DSPIRV_CROSS_STATIC=OFF \
+            -DSPIRV_CROSS_SHARED=ON \
+            -DSPIRV_CROSS_CLI=OFF \
+            -DSPIRV_CROSS_ENABLE_TESTS=OFF
+        cmake --build "${spvc_build}" --target spirv-cross-c-shared
+        cp "${spvc_build}/libspirv-cross-c-shared.so" "${out}/libspirv-cross-c-shared.so"
+    fi
+
+    # ----------------------------------------------------------------------------------------
     # Verification
     # ----------------------------------------------------------------------------------------
     # The JNI sets are packaged as assets, which the Android plugin copies verbatim rather than
@@ -430,6 +559,36 @@ for abi in "${ABIS[@]}"; do
                  "JNI symbols, expected 0 and ${renamed}" >&2; exit 1; }
         printf '    %-24s %-30s %5s relocated under %s\n' \
             "lwjgl2/liblwjgl_opengl.so" "${machine}" "${moved}" "${LWJGL2_PACKAGE}.opengl"
+    fi
+    if [[ "${VULKAN}" == "yes" ]]; then
+        verify "${out}/liblwjgl_vma.so" "${machine}" jni
+        for lib in libshaderc_shared libspirv-cross-c-shared; do
+            verify "${out}/${lib}.so" "${machine}" plain
+        done
+        # The bindings dispatch through libffi by symbol name, so a library that is present but
+        # exports nothing under the expected name fails at the first shader compile rather than at
+        # load. Read one entry point back off each to catch that here instead.
+        #
+        # Counted rather than matched with `grep -q`: this script runs under `pipefail`, and a
+        # quiet grep closes the pipe on its first hit, which reaches readelf as SIGPIPE and fails
+        # the whole pipeline for a symbol that is present. Counting reads the stream to the end.
+        exports="$("${READELF}" --dyn-syms "${out}/libshaderc_shared.so" \
+            | grep -c ' shaderc_compile_into_spv' || true)"
+        [[ "${exports}" -gt 0 ]] \
+            || { echo "libshaderc_shared.so exports no shaderc_compile_into_spv" >&2; exit 1; }
+        exports="$("${READELF}" --dyn-syms "${out}/libspirv-cross-c-shared.so" \
+            | grep -c ' spvc_context_create' || true)"
+        [[ "${exports}" -gt 0 ]] \
+            || { echo "libspirv-cross-c-shared.so exports no spvc_context_create" >&2; exit 1; }
+        # Android's linker keys a loaded library on its SONAME rather than on the path it was
+        # opened through, so a file whose name disagrees with its SONAME is a library the loader
+        # knows by a name nothing asks for. Read back rather than assumed.
+        for lib in libshaderc_shared libspirv-cross-c-shared; do
+            soname="$("${READELF}" -d "${out}/${lib}.so" \
+                | sed -n 's/.*Library soname: \[\(.*\)\].*/\1/p')"
+            [[ "${soname}" == "${lib}.so" ]] \
+                || { echo "${lib}.so has SONAME ${soname}, expected ${lib}.so" >&2; exit 1; }
+        done
     fi
     if [[ "${THIRD_PARTY}" == "yes" ]]; then
         for lib in libfreetype libopenal; do
