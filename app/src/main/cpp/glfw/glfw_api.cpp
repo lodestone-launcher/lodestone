@@ -636,8 +636,73 @@ __attribute__((visibility("default"))) int glfwGetMouseButton(GLFWwindow*, int b
     return state().mouseButtons[button].load();
 }
 
-__attribute__((visibility("default"))) const char* glfwGetKeyName(int, int) {
-    return nullptr;
+/**
+ * The name of a printable key, or null for one that has no printed character.
+ *
+ * Minecraft leans on this harder than it looks. Its language files carry a `key.keyboard.*` entry
+ * for the named keys — space, escape, the function keys — but none for letters, digits or
+ * punctuation, because on a desktop GLFW reports those from the active keyboard layout. A shim that
+ * returned null for everything left the game with nothing to show but the translation key itself,
+ * which is why the tutorial hint read "Move with key.keyboard.w".
+ *
+ * The names are the ones GLFW produces for a US layout, which is the layout an on-screen control
+ * overlay is: the buttons send `GLFW_KEY_W` because they are labelled W. A physical keyboard with
+ * another layout would want its own names, and that has to come from Android's key character map
+ * rather than from a table here — but reporting nothing at all is not the better answer for it.
+ *
+ * The returned pointer outlives the call, as GLFW's contract requires.
+ */
+__attribute__((visibility("default"))) const char* glfwGetKeyName(int key, int) {
+    // Letters are GLFW_KEY_A..Z, which are the ASCII uppercase values, and GLFW names them in
+    // lowercase — the character the key produces unshifted.
+    if (key >= 'A' && key <= 'Z') {
+        static char names[26][2];
+        char* name = names[key - 'A'];
+        name[0] = static_cast<char>(key - 'A' + 'a');
+        name[1] = '\0';
+        return name;
+    }
+    if (key >= '0' && key <= '9') {
+        static char names[10][2];
+        char* name = names[key - '0'];
+        name[0] = static_cast<char>(key);
+        name[1] = '\0';
+        return name;
+    }
+
+    switch (key) {
+        case 39: return "'";
+        case 44: return ",";
+        case 45: return "-";
+        case 46: return ".";
+        case 47: return "/";
+        case 59: return ";";
+        case 61: return "=";
+        case 91: return "[";
+        case 92: return "\\";
+        case 93: return "]";
+        case 96: return "`";
+        // The keypad, which GLFW names by the character it produces rather than by its position.
+        case 320: return "0";
+        case 321: return "1";
+        case 322: return "2";
+        case 323: return "3";
+        case 324: return "4";
+        case 325: return "5";
+        case 326: return "6";
+        case 327: return "7";
+        case 328: return "8";
+        case 329: return "9";
+        case 330: return ".";
+        case 331: return "/";
+        case 332: return "*";
+        case 333: return "-";
+        case 334: return "+";
+        case 336: return "=";
+        // Everything else — the modifiers, the function keys, the arrows — has no printed
+        // character, and GLFW answers null so the caller falls back to a name of its own.
+        default: return nullptr;
+    }
 }
 
 __attribute__((visibility("default"))) int glfwGetKeyScancode(int key) {
