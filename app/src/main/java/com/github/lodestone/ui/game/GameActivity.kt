@@ -21,6 +21,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.github.lodestone.domain.model.launch.LaunchRequest
 import com.github.lodestone.domain.model.version.GraphicsBackend
 import com.github.lodestone.runtime.GlfwBridge
+import com.github.lodestone.runtime.GlfwKeys
 import com.github.lodestone.runtime.JvmBridge
 import timber.log.Timber
 import java.io.File
@@ -170,7 +171,12 @@ class GameActivity : ComponentActivity() {
     private fun showInGameMenu() {
         // Routed through the game rather than handled here, so the player lands on Minecraft's own
         // pause screen and the world is saved the way the game expects.
-        GlfwBridge.sendKey(0, 0, GlfwBridge.Action.PRESS)
+        //
+        // Both halves are sent: Minecraft opens the pause screen on the press, but a key it never
+        // sees released stays down in its own key state, and the next Escape then reads as a repeat
+        // rather than as a new press.
+        GlfwBridge.sendKey(GlfwKeys.ESCAPE, 0, GlfwBridge.Action.PRESS)
+        GlfwBridge.sendKey(GlfwKeys.ESCAPE, 0, GlfwBridge.Action.RELEASE)
     }
 
     companion object {
