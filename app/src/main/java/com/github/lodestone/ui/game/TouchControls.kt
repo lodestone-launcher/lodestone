@@ -540,6 +540,10 @@ private fun CursorArea(modifier: Modifier = Modifier) {
 private fun Thumbstick(size: Dp) {
     val density = LocalDensity.current
     val radius = remember(density, size) { with(density) { (size / 2).toPx() } }
+    // Held as a fraction of full deflection rather than as pixels, which is what lets the input and
+    // the drawing disagree about how far "all the way" is. The finger may travel the whole radius,
+    // because that is what the keys are read from; the knob may not, because it has a width and the
+    // frame has an edge.
     var knob by remember { mutableStateOf(Offset.Zero) }
     val held = remember { mutableSetOf<Int>() }
 
@@ -575,8 +579,9 @@ private fun Thumbstick(size: Dp) {
                         } else {
                             offset
                         }
-                        knob = clamped
-                        apply(keysFor(if (radius > 0f) clamped / radius else Offset.Zero))
+                        val normalised = if (radius > 0f) clamped / radius else Offset.Zero
+                        knob = normalised
+                        apply(keysFor(normalised))
 
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -598,10 +603,14 @@ private fun Thumbstick(size: Dp) {
             val knobArt = pixelPainter(stick.second)
             Canvas(modifier = Modifier.fillMaxSize()) {
                 with(frame) { draw(this@Canvas.size) }
-                val knobSize = Size(this.size.minDimension / 2.4f, this.size.minDimension / 2.4f)
+                val extent = this.size.minDimension / KNOB_FRACTION
+                val knobSize = Size(extent, extent)
+                // The knob stops where its own edge meets the frame's, so full deflection puts it
+                // against the rim rather than half outside it — where the canvas would clip it.
+                val travel = this.size.minDimension / 2f - extent / 2f
                 translate(
-                    left = (this.size.width - knobSize.width) / 2f + knob.x,
-                    top = (this.size.height - knobSize.height) / 2f + knob.y,
+                    left = (this.size.width - extent) / 2f + knob.x * travel,
+                    top = (this.size.height - extent) / 2f + knob.y * travel,
                 ) {
                     with(knobArt) { draw(knobSize) }
                 }
@@ -616,10 +625,11 @@ private fun Thumbstick(size: Dp) {
                     center = centre,
                     style = Stroke(width = 2f),
                 )
+                val knobRadius = this.size.minDimension / 6f
                 drawCircle(
                     color = STICK_KNOB,
-                    radius = this.size.minDimension / 6f,
-                    center = centre + knob,
+                    radius = knobRadius,
+                    center = centre + knob * (this.size.minDimension / 2f - knobRadius),
                 )
             }
         }
@@ -812,6 +822,9 @@ private const val GRAB_POLL_MILLIS = 100L
 
 /** Mouse counts per density-independent pixel of travel. */
 private const val LOOK_SENSITIVITY = 1.4f
+
+/** The knob's diameter as a fraction of the frame's, matching how Bedrock's two textures relate. */
+private const val KNOB_FRACTION = 2.4f
 
 private const val STICK_DEAD_ZONE = 0.28f
 private const val STICK_AXIS_THRESHOLD = 0.38f
