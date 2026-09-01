@@ -47,23 +47,51 @@ void applyEnvironment(bool desktopGl) {
     // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
     // its shader conversion path is what matters.
     setenv("LIBGL_NOBANNER", "1", 1);
-    // Still not claiming 3.3, and the reason has moved.
+    // Claim 3.3, which the fork can now back.
     //
-    // The API surface is there now: the fork forwards uniform buffers, sync objects and sampler
-    // objects to an ES 3.0 driver, maps the buffer targets a core profile binds to, and answers the
-    // profile mask. With it, 1.17-and-later gets through renderer setup and all the way to loading
-    // its shader programs — far past the version gate it used to fail at.
+    // It forwards uniform buffers, sync objects and sampler objects to an ES 3.0 driver, maps the
+    // buffer targets a core profile binds to, answers the profile mask, and translates the shaders
+    // themselves through SPIR-V — glslang reads the desktop dialect and SPIRV-Cross writes ESSL,
+    // which is what it takes to get past desktop GLSL's implicit int-to-float conversion. On 26.1.2
+    // every one of its shader programs now compiles and links.
     //
-    // What stops it there is the shading language, not the API. Minecraft's shaders are GLSL 330
-    // core, and desktop GLSL converts int to float implicitly where ESSL never does, in any version:
-    // `uv / 256.0` on an ivec2 is ordinary desktop code and a compile error on ES. Confirmed against
-    // glslangValidator, so it is the specification rather than one vendor's compiler. 15 of 26.1.2's
-    // 69 shaders trip it, and the same handful of expressions fail identically in 1.21.11.
-    //
-    // Claiming 3.3 before that is answered would trade a clear "this driver does not support OpenGL
-    // 3.3" for a wall of "Failed to load required shader programs", and would tell versions that ask
-    // for 2.1 they are on a core profile. One line to turn on once the shaders compile.
-    // setenv("LIBGL_GL", "33", 1);
+    // This is a per-process environment variable rather than a per-version decision because gl4es
+    // reads it in a library constructor, which runs when the renderer is opened — before the game
+    // has said anything about the context it wants. Versions that ask for less than 3.3 are told
+    // 3.3 as well; the value only changes what gl4es reports, never which path it takes, and the
+    // shader translation keys off each shader's own #version rather than this.
+    setenv("LIBGL_GL", "33", 1);
+}
+
+/**
+ * Tells gl4es how big the default framebuffer is.
+ *
+ * gl4es needs this whenever something blits to framebuffer 0, which is how Minecraft puts its
+ * finished frame on the screen: it sets the viewport to that size before drawing. Normally it
+ * learns the size from its own GLX layer, which is exactly the part `NOX11` compiles out, and with
+ * nobody to ask it used zero — a full-screen blit into a zero-sized viewport, drawing nothing, per
+ * frame, with no GL error to show for it.
+ *
+ * This shim created the surface, so it is the thing that knows. Read live rather than captured,
+ * because the surface is replaced on rotation.
+ */
+void mainFramebufferSize(int* width, int* height) {
+    if (width != nullptr) {
+        *width = state().width.load();
+    }
+    if (height != nullptr) {
+        *height = state().height.load();
+    }
+}
+
+void installFramebufferSizeHook(void* layer) {
+    using SetGetMainFBSize = void (*)(void (*)(int*, int*));
+    auto install = reinterpret_cast<SetGetMainFBSize>(dlsym(layer, "set_getmainfbsize"));
+    if (install == nullptr) {
+        // Zink and any other layer that resolves the size itself; nothing to install.
+        return;
+    }
+    install(&mainFramebufferSize);
 }
 
 } // namespace
@@ -107,6 +135,8 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates) {
             shutdownEgl();
             continue;
         }
+
+        installFramebufferSizeHook(g_layer);
 
         LOGI("renderer %s selected (%s)", candidate.id.c_str(), candidate.layerPath.c_str());
         return static_cast<int>(index);

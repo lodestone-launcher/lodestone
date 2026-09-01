@@ -34,6 +34,13 @@ app/src/main/assets/lwjgl/
 app/src/main/jniLibs/*/libfreetype.so
 app/src/main/jniLibs/*/libopenal.so
 
+# shaderc and SPIRV-Cross, from runtime/build-lwjgl.sh, which already builds them for the Vulkan
+# backend's own use. They are here as well as in the LWJGL sets because gl4es opens them to
+# translate core-profile GLSL, and it has to be able to do that for a version whose LWJGL release
+# predates them: 1.17 through 1.21 need the translation and ship an LWJGL that carries neither.
+app/src/main/jniLibs/*/libshaderc_shared.so
+app/src/main/jniLibs/*/libspirv-cross-c-shared.so
+
 # The NDK's C++ runtime, copied in by the native build rather than written here.
 app/src/main/jniLibs/*/libc++_shared.so
 
