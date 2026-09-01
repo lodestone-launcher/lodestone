@@ -36,6 +36,16 @@ app/src/main/jniLibs/*/libopenal.so
 
 # The NDK's C++ runtime, copied in by the native build rather than written here.
 app/src/main/jniLibs/*/libc++_shared.so
+
+# Zink and the Mesa libraries it needs beside it, from runtime/build-zink.sh — 21 MB in
+# libgallium_dri.so alone. libEGL_zink.so is Mesa's EGL, renamed on the way in so that it cannot
+# shadow Android's, which every DT_NEEDED in the process would otherwise resolve to.
+app/src/main/jniLibs/*/libGL.so
+app/src/main/jniLibs/*/libEGL_zink.so
+app/src/main/jniLibs/*/libgallium_dri.so
+app/src/main/jniLibs/*/libdrm.so
+app/src/main/jniLibs/*/libcutils.so
+app/src/main/jniLibs/*/libhardware.so
 /out/
 
 # Worktrees an agent session creates for itself; each is a clone of this repository.

@@ -31,6 +31,11 @@ target_link_libraries(lodestone_compat log)
 # when the runtime's own libraries are relocated later.
 target_link_options(lodestone_compat PRIVATE -Wl,-z,global)
 
+# Replaces the `libhardware.so` Mesa's own build stubs out. Built here rather than staged from the
+# Zink output because the stub Mesa ships reports gralloc as present while leaving the module null,
+# and Mesa dereferences it inside eglInitialize — a SIGSEGV at 0x10 before Zink is ever reached.
+add_library(hardware SHARED mesa/hardware_stub.cpp)
+
 # Stands in for GLFW. LWJGL resolves these symbols by name, so unlike everything else here the
 # library keeps default visibility for its glfw* exports.
 add_library(lodestone_glfw SHARED

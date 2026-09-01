@@ -165,14 +165,20 @@ WindowState& state();
 void postEvent(const Event& event);
 
 /**
- * One desktop-GL translation layer the shim can bring up over Android's EGL.
+ * One desktop-GL translation layer the shim can bring up, and the EGL that drives it.
  *
- * Only reached on the OpenGL path. A Vulkan launch passes no candidates at all: the game creates
- * its own device and surface, and the shim never brings EGL up.
+ * Only reached on the OpenGL path; a Vulkan launch passes no candidates at all, because the game
+ * creates its own device and surface and the shim never brings EGL up.
+ *
+ * gl4es rewrites desktop GL onto the device's own GL ES driver, so it wants Android's EGL and an ES
+ * context — which is what an empty [eglLibrary] selects, since the shim links against it already.
+ * Zink is a Mesa driver: its GL entry points only work on a context that Mesa's own EGL created,
+ * and that EGL is a different library. Neither can be chosen at link time.
  */
 struct RendererCandidate {
     std::string id;
     std::string layerPath;
+    std::string eglLibrary;
 };
 
 /**
@@ -199,12 +205,13 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates);
 void* translationLayer();
 
 /**
- * Brings up Android's EGL with a GL ES 3 context.
+ * Brings up EGL from [eglLibrary], or Android's own when it is null or empty, with a desktop GL
+ * context when [desktopGl] and a GL ES 3 one otherwise.
  *
  * Implemented beside the rest of the EGL plumbing in glfw_api.cpp, and only meant for
  * [selectRenderer] to call.
  */
-bool initialiseEgl();
+bool initialiseEgl(const char* eglLibrary, bool desktopGl);
 
 /** Undoes [initialiseEgl] completely, so that another candidate can be tried on a clean slate. */
 void shutdownEgl();

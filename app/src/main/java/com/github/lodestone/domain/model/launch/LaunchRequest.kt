@@ -18,6 +18,8 @@ data class RendererChoice(
     /** The [Renderer]'s id, carried so the log names what was tried rather than a bare path. */
     val id: String,
     val layerPath: String,
+    /** The EGL the layer is driven through, or null for Android's. */
+    val eglLibraryPath: String? = null,
 )
 
 @Serializable
@@ -71,6 +73,7 @@ data class LaunchRequest(
                 RendererChoice(
                     id = candidate.renderer.id,
                     layerPath = candidate.layer.absolutePath,
+                    eglLibraryPath = candidate.eglLibrary?.absolutePath,
                 )
             },
             environment = spec.environment,

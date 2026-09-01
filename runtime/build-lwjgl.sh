@@ -93,13 +93,21 @@ WORK="${TMPDIR:-/tmp}/lodestone-lwjgl"
 LIBFFI_REPO="https://github.com/libffi/libffi.git"
 LIBFFI_TAG=""
 LWJGL_REPO="https://github.com/LWJGL/lwjgl3.git"
-# LWJGL builds these two from untagged commits a few days either side of a release. The nearest
-# tags are used instead, which for OpenAL Soft gives byte-identical coverage of the entry points
-# Mojang's own libopenal.so exports.
+# LWJGL builds these two from untagged commits a few days either side of a release; the nearest
+# tags are used instead.
+#
+# OpenAL's tag is not a free choice. Minecraft 26.x asks ALC whether ALC_SOFT_system_events is
+# supported before it will build a sound engine at all, and that extension arrives in OpenAL Soft
+# 1.24.0. 1.23.1 exports no `alcEventIsSupportedSOFT`, so with LWJGL's checks on the query throws
+# and the launch dies in SoundEngine's constructor — which is exactly what it did. Read back off
+# LWJGL's own published libopenal.so, which carries the symbol, rather than assumed from a number.
+#
+# The 1.24 line rather than the newest: 1.25 uses a C++23 range adaptor on its own FlexArray that
+# the NDK 28 libc++ rejects outright, and nothing in 1.25 is needed here.
 FREETYPE_REPO="https://github.com/freetype/freetype.git"
 FREETYPE_TAG="VER-2-13-2"
 OPENAL_REPO="https://github.com/kcat/openal-soft.git"
-OPENAL_TAG="1.23.1"
+OPENAL_TAG="1.24.3"
 # The two libraries Minecraft's Vulkan backend compiles its shaders through. Neither has generated
 # JNI code: the bindings reach them through libffi by symbol name, so what matters is that the C
 # API is present and the SONAME is the one LWJGL asks for, not that the build matches a release.
@@ -628,6 +636,21 @@ for abi in "${ABIS[@]}"; do
         for lib in libfreetype libopenal; do
             verify "${out}/${lib}.so" "${machine}" plain
         done
+        # OpenSL ES is the only output path bionic offers, so a build without it is silent — and
+        # silence is not something a launch reports. Looked for in the file rather than in
+        # DT_NEEDED: 1.23 linked the library, 1.24 `dlopen`s it by name instead, so the needed
+        # entry is empty on a build that has the backend perfectly well.
+        backend="$(grep -ac 'libOpenSLES\.so' "${out}/libopenal.so" || true)"
+        [[ "${backend}" -gt 0 ]] \
+            || { echo "libopenal.so has no Android OpenSL ES playback backend" >&2; exit 1; }
+        # The extension Minecraft 26.x gates its sound engine on. Checked as an advertised
+        # extension string rather than as an exported symbol: OpenAL hands out its extension entry
+        # points through alcGetProcAddress, and alcEventIsSupportedSOFT is deliberately not in the
+        # dynamic table even in a build that has it. What LWJGL asks first is alcIsExtensionPresent,
+        # and that is answered from this string.
+        events="$(grep -ac 'ALC_SOFT_system_events' "${out}/libopenal.so" || true)"
+        [[ "${events}" -gt 0 ]] \
+            || { echo "libopenal.so does not advertise ALC_SOFT_system_events" >&2; exit 1; }
     fi
 done
 

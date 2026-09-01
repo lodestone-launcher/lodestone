@@ -27,6 +27,17 @@ OpenAL Soft
     shared library and is loaded dynamically, so it may be replaced with another
     build of the same version.
 
+Mesa  (Zink, and the libdrm it builds against)
+    MIT
+    https://gitlab.freedesktop.org/mesa/mesa
+    -> https://github.com/lodestone-launcher/mesa
+
+    Modified. Four patches, none of them driver-specific: three teach an
+    Android build to export and bind the desktop GL entry points and to
+    connect a native window when EGL is loaded directly, and one lets Zink be
+    pointed at a chosen Vulkan library. Zink runs on the device's own
+    libvulkan.so; no Vulkan driver is built or shipped.
+
 gl4es
     MIT
     https://github.com/ptitSeb/gl4es

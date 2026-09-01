@@ -79,6 +79,8 @@ data class RendererCandidate(
     val renderer: Renderer,
     /** The desktop-GL translation layer to open. */
     val layer: File,
+    /** The EGL the layer is driven through, or null for Android's. */
+    val eglLibrary: File?,
 )
 
 /**
@@ -110,6 +112,23 @@ enum class Renderer(val id: String, val label: String, val description: String) 
         description = "The game's own Vulkan renderer, with no translation. Needs a version that ships one.",
     ),
 
+    /**
+     * Translate desktop GL onto Vulkan, through Mesa's Zink.
+     *
+     * The only path that reaches a real OpenGL 3.3 core profile, which is what every version from
+     * 1.17 up to the arrival of the game's own Vulkan backend asks for and refuses to start
+     * without. Zink is Mesa, so uniform buffers, sync objects and core-profile semantics are
+     * simply there rather than things we would have to write.
+     *
+     * It runs on the device's own Vulkan loader — the same one the Vulkan backend uses — so it
+     * carries no driver of its own and nothing in it is particular to a vendor.
+     */
+    ZINK(
+        id = "zink",
+        label = "Vulkan translation",
+        description = "Desktop OpenGL on the device's Vulkan driver. Needed for 1.17 and later.",
+    ),
+
     /** Translate desktop GL onto OpenGL ES. */
     GL4ES(
         id = "gl4es",
@@ -129,7 +148,10 @@ enum class Renderer(val id: String, val label: String, val description: String) 
      */
     val chain: List<Renderer>
         get() = when (this) {
-            AUTO -> listOf(GL4ES)
+            // Zink first: it is the only one that reaches the 3.3 core profile the modern versions
+            // require, and gl4es is the fallback for the older ones it was always right for — and
+            // for a device whose Vulkan driver Zink cannot come up on.
+            AUTO -> listOf(ZINK, GL4ES)
             VULKAN -> emptyList()
             else -> listOf(this)
         }
@@ -137,11 +159,32 @@ enum class Renderer(val id: String, val label: String, val description: String) 
     /** The translation layer library, or null when the game talks to the driver itself. */
     val libraryName: String?
         get() = when (this) {
+            ZINK -> ZINK_LIBRARY
             GL4ES -> GL4ES_LIBRARY
             AUTO, VULKAN -> null
         }
 
+    /**
+     * The EGL implementation the layer must be driven through, or null for Android's.
+     *
+     * Zink's GL entry points only work on a context Mesa's own EGL created. gl4es forwards to the
+     * device's GL ES driver and wants Android's, which the shim is linked against already.
+     */
+    val eglLibraryName: String?
+        get() = if (this == ZINK) ZINK_EGL_LIBRARY else null
+
     private companion object {
+        /** Mesa builds Zink into a plain `libGL.so`, beside the `libgallium_dri.so` it loads. */
+        const val ZINK_LIBRARY = "libGL.so"
+
+        /**
+         * Mesa's EGL, staged under a name of its own.
+         *
+         * Its SONAME is still `libEGL.so`, and packaged under that name it would sit ahead of
+         * Android's on the app's library search path — so anything resolving the system EGL by
+         * `DT_NEEDED`, this shim included, would silently get Mesa's instead.
+         */
+        const val ZINK_EGL_LIBRARY = "libEGL_zink.so"
         const val GL4ES_LIBRARY = "libgl4es.so"
     }
 }

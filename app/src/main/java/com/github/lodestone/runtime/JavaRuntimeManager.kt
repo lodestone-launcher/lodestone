@@ -189,7 +189,13 @@ class JavaRuntimeManager(private val files: GameFiles) {
             if (!layer.isFile) {
                 return@mapNotNull null
             }
-            RendererCandidate(renderer = candidate, layer = layer)
+            RendererCandidate(
+                renderer = candidate,
+                layer = layer,
+                eglLibrary = candidate.eglLibraryName
+                    ?.let { File(shimDirectory, it) }
+                    ?.takeIf(File::isFile),
+            )
         }
 
     /**

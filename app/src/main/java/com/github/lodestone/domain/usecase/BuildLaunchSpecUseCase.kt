@@ -144,9 +144,14 @@ class BuildLaunchSpecUseCase(
         // Empty on the Vulkan path, and that emptiness is the instruction: the shim brings up no
         // EGL and opens no layer, because the game is about to create its own device and present
         // to the window itself.
+        // A Vulkan choice that lands on the OpenGL path has nothing to say about which layer to
+        // use, and its own chain is empty — asking it would leave the launch with no renderer at
+        // all. What someone asking for Vulkan wants from a version that has none is the best
+        // OpenGL path, which is what Automatic means.
+        val glRenderer = if (options.renderer.isVulkan) Renderer.AUTO else options.renderer
         val renderers = when (backend) {
             GraphicsBackend.VULKAN -> emptyList()
-            GraphicsBackend.OPENGL -> runtimes.rendererCandidates(nativeLibraryDir, options.renderer)
+            GraphicsBackend.OPENGL -> runtimes.rendererCandidates(nativeLibraryDir, glRenderer)
         }
         val jvmArgs = buildList {
             // The `java` launcher derives java.home from its own location and hands it to the VM.

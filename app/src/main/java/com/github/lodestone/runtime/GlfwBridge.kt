@@ -58,6 +58,7 @@ object GlfwBridge {
         val chosen = nativeSelectRenderer(
             candidates.map { it.id }.toTypedArray(),
             candidates.map { it.layerPath }.toTypedArray(),
+            candidates.map { it.eglLibraryPath.orEmpty() }.toTypedArray(),
         )
         return candidates.getOrNull(chosen)
     }
@@ -147,6 +148,7 @@ object GlfwBridge {
     private external fun nativeSelectRenderer(
         ids: Array<String>,
         layerPaths: Array<String>,
+        eglLibraries: Array<String>,
     ): Int
 
     @JvmStatic

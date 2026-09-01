@@ -19,12 +19,28 @@ void* g_layer = nullptr;
 bool g_selected = false;
 
 /**
- * Puts the environment gl4es reads into place before it is opened.
+ * Puts the environment a candidate reads into place before anything opens it.
  *
- * It works this out once, as it comes up, so nothing here can be deferred. Set at run time rather
- * than baked in at build time so that one binary keeps working across vendors.
+ * Both layers work this out once, as they come up, so nothing here can be deferred. Setting them
+ * per candidate rather than baking them in at build time keeps one binary working across vendors.
  */
-void applyEnvironment() {
+void applyEnvironment(bool desktopGl) {
+    if (desktopGl) {
+        // Zink is the only Gallium driver built, but the loader still probes for a hardware driver
+        // by name first and would find none.
+        setenv("GALLIUM_DRIVER", "zink", 1);
+        setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+        // Zink advertises whatever the Vulkan driver underneath can support, which it works out
+        // lazily; the overrides stop Mesa capping the profile below what Minecraft asks for.
+        setenv("MESA_GL_VERSION_OVERRIDE", "4.6", 1);
+        setenv("MESA_GLSL_VERSION_OVERRIDE", "460", 1);
+        setenv("GALLIUM_THREAD", "0", 1);
+        // Deliberately not pointed at a bundled driver. Zink runs on whatever libvulkan.so the
+        // device has, which is the same loader the Vulkan backend already renders 26.2 through —
+        // and unlike a driver of our own, every device has one.
+        return;
+    }
+
     // gl4es reads these to find the drivers it forwards to.
     setenv("LIBGL_GLES", "libGLESv2.so", 1);
     setenv("LIBGL_EGL", "libEGL.so", 1);
@@ -55,9 +71,10 @@ int selectRenderer(const std::vector<RendererCandidate>& candidates) {
 
     for (size_t index = 0; index < candidates.size(); ++index) {
         const RendererCandidate& candidate = candidates[index];
-        applyEnvironment();
+        const bool desktopGl = !candidate.eglLibrary.empty();
+        applyEnvironment(desktopGl);
 
-        if (!initialiseEgl()) {
+        if (!initialiseEgl(candidate.eglLibrary.c_str(), desktopGl)) {
             LOGE("renderer %s did not come up; trying the next", candidate.id.c_str());
             shutdownEgl();
             continue;
@@ -139,7 +156,8 @@ void recordMouseButton(int button, int action) {
 extern "C" {
 
 JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSelectRenderer(
-        JNIEnv* env, jclass, jobjectArray ids, jobjectArray layerPaths) {
+        JNIEnv* env, jclass, jobjectArray ids, jobjectArray layerPaths,
+        jobjectArray eglLibraries) {
     // Copied out of the JVM up front, because bringing a renderer up runs driver code that can take
     // its time, and holding pinned string bodies across that is what `GetStringUTFChars` asks not
     // to be done.
@@ -159,7 +177,7 @@ JNIEXPORT jint JNICALL Java_com_github_lodestone_runtime_GlfwBridge_nativeSelect
     const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
     candidates.reserve(static_cast<size_t>(count));
     for (jsize index = 0; index < count; ++index) {
-        candidates.push_back({read(ids, index), read(layerPaths, index)});
+        candidates.push_back({read(ids, index), read(layerPaths, index), read(eglLibraries, index)});
     }
 
     return lodestone::glfw::selectRenderer(candidates);

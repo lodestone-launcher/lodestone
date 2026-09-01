@@ -55,18 +55,44 @@ struct EglApi {
 };
 
 EglApi egl;
+void* g_eglHandle = nullptr;
 
 /**
- * Points [egl] at the EGL this shim is linked against.
+ * Points [egl] at [library], or at the EGL this shim is linked against when it is null or empty.
  *
- * Android's is the only EGL in the process now. It used to be selectable, because Mesa's Zink
- * needed its own — but the game renders through Vulkan itself where it can, and gl4es forwards to
- * the device's own GL ES driver, which is what this EGL already drives.
+ * Android's EGL is deliberately taken from the link rather than reopened by name. Mesa's copy keeps
+ * the SONAME `libEGL.so`, so once it is in the process a `dlopen("libEGL.so")` can be answered with
+ * it instead — which is exactly the wrong answer for the gl4es candidate the chain falls back to.
  */
-void loadEgl() {
+bool loadEgl(const char* library) {
+    if (library == nullptr || *library == '\0') {
 #define LODESTONE_BIND_EGL(name) egl.name = &::name;
-    LODESTONE_EGL_FUNCTIONS(LODESTONE_BIND_EGL)
+        LODESTONE_EGL_FUNCTIONS(LODESTONE_BIND_EGL)
 #undef LODESTONE_BIND_EGL
+        LOGI("EGL served by Android");
+        return true;
+    }
+
+    g_eglHandle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    if (g_eglHandle == nullptr) {
+        LOGE("EGL library %s did not load: %s", library, dlerror());
+        return false;
+    }
+
+    bool complete = true;
+#define LODESTONE_RESOLVE_EGL(name)                                                    \
+    egl.name = reinterpret_cast<decltype(&::name)>(dlsym(g_eglHandle, #name));         \
+    if (egl.name == nullptr) {                                                         \
+        LOGE("%s exports no %s", library, #name);                                      \
+        complete = false;                                                              \
+    }
+    LODESTONE_EGL_FUNCTIONS(LODESTONE_RESOLVE_EGL)
+#undef LODESTONE_RESOLVE_EGL
+
+    if (complete) {
+        LOGI("EGL served by %s", library);
+    }
+    return complete;
 }
 
 /**
@@ -164,13 +190,15 @@ bool bindSurface(lodestone::glfw::WindowState& s) {
 
 namespace lodestone::glfw {
 
-bool initialiseEgl() {
+bool initialiseEgl(const char* eglLibrary, bool desktopGl) {
     auto& s = state();
     if (s.initialised.load()) {
         return true;
     }
 
-    loadEgl();
+    if (!loadEgl(eglLibrary)) {
+        return false;
+    }
 
     s.display = egl.eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (s.display == EGL_NO_DISPLAY || egl.eglInitialize(s.display, nullptr, nullptr) != EGL_TRUE) {
@@ -178,11 +206,17 @@ bool initialiseEgl() {
         return false;
     }
 
+    // EGL defaults to the ES API, and a desktop context has to be asked for before it is created.
+    if (desktopGl && egl.eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) {
+        LOGE("eglBindAPI(EGL_OPENGL_API) failed: 0x%04x", egl.eglGetError());
+        return false;
+    }
+
     // Minecraft needs a depth buffer and 8-bit colour; it manages its own stencil and multisample
     // state through framebuffer objects rather than the default framebuffer.
     const EGLint attributes[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_RENDERABLE_TYPE, desktopGl ? EGL_OPENGL_BIT : EGL_OPENGL_ES3_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE, 8,
@@ -198,8 +232,16 @@ bool initialiseEgl() {
         return false;
     }
 
-    // A GL ES 3 context, which is what gl4es forwards desktop GL onto.
-    const EGLint contextAttributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+    // 3.2 core is what Minecraft asks for from 1.17 onwards. Requesting exactly that rather than
+    // the highest the driver offers keeps the game on the profile its shaders are written against.
+    const EGLint desktopAttributes[] = {
+        EGL_CONTEXT_MAJOR_VERSION, 3,
+        EGL_CONTEXT_MINOR_VERSION, 2,
+        EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+        EGL_NONE,
+    };
+    const EGLint esAttributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+    const EGLint* contextAttributes = desktopGl ? desktopAttributes : esAttributes;
     s.context = egl.eglCreateContext(s.display, s.config, EGL_NO_CONTEXT, contextAttributes);
     if (s.context == EGL_NO_CONTEXT) {
         LOGE("eglCreateContext failed: 0x%04x", egl.eglGetError());
@@ -215,7 +257,7 @@ bool initialiseEgl() {
     }
 
     s.initialised.store(true);
-    LOGI("EGL up: GL ES 3 context");
+    LOGI("EGL up: %s context", desktopGl ? "desktop GL" : "GL ES");
     return true;
 }
 
@@ -241,6 +283,13 @@ void shutdownEgl() {
         s.display = EGL_NO_DISPLAY;
     }
     s.config = nullptr;
+
+    // Unloaded, not just forgotten. Mesa's EGL answers to the SONAME `libEGL.so`, so leaving a
+    // rejected copy in the process would leave it able to satisfy a later request for Android's.
+    if (g_eglHandle != nullptr) {
+        dlclose(g_eglHandle);
+        g_eglHandle = nullptr;
+    }
     egl = EglApi{};
 }
 
