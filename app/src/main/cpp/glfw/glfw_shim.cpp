@@ -47,13 +47,23 @@ void applyEnvironment(bool desktopGl) {
     // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
     // its shader conversion path is what matters.
     setenv("LIBGL_NOBANNER", "1", 1);
-    // Deliberately not claiming 3.3 yet. The fork can now answer the profile mask and forward
-    // uniform buffers and fences to an ES 3.0 driver, which is enough to get 1.17-and-later past
-    // the version gate and past the alignment it used to divide by — but not yet enough to create
-    // a uniform buffer, because gl4es keeps its own buffer name space and GL_UNIFORM_BUFFER is not
-    // one of the four targets it maps. Claiming 3.3 before that lands would turn a clean "does not
-    // support OpenGL 3.3" into a GL_INVALID_ENUM three frames into initialisation, and would move
-    // versions that work today onto paths that do not.
+    // Still not claiming 3.3, and the reason has moved.
+    //
+    // The API surface is there now: the fork forwards uniform buffers, sync objects and sampler
+    // objects to an ES 3.0 driver, maps the buffer targets a core profile binds to, and answers the
+    // profile mask. With it, 1.17-and-later gets through renderer setup and all the way to loading
+    // its shader programs — far past the version gate it used to fail at.
+    //
+    // What stops it there is the shading language, not the API. Minecraft's shaders are GLSL 330
+    // core, and desktop GLSL converts int to float implicitly where ESSL never does, in any version:
+    // `uv / 256.0` on an ivec2 is ordinary desktop code and a compile error on ES. Confirmed against
+    // glslangValidator, so it is the specification rather than one vendor's compiler. 15 of 26.1.2's
+    // 69 shaders trip it, and the same handful of expressions fail identically in 1.21.11.
+    //
+    // Claiming 3.3 before that is answered would trade a clear "this driver does not support OpenGL
+    // 3.3" for a wall of "Failed to load required shader programs", and would tell versions that ask
+    // for 2.1 they are on a core profile. One line to turn on once the shaders compile.
+    // setenv("LIBGL_GL", "33", 1);
 }
 
 } // namespace
