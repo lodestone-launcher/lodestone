@@ -126,24 +126,33 @@ data class ControlLayout(val placements: List<ControlPlacement> = DEFAULT) {
             ControlPlacement(ControlId.JUMP, x = 0.925f, y = 0.394f, size = 58f),
             ControlPlacement(ControlId.SPRINT, x = 0.826f, y = 0.494f, size = 58f),
             ControlPlacement(ControlId.SNEAK, x = 0.925f, y = 0.585f, size = 58f),
+            // Bedrock's three sit in a zigzag — jump and sneak in the outer column, sprint alone
+            // in the inner one — and that is not decoration. At 58dp the buttons are 151px on the
+            // panel these were measured from, and the rows are 120px apart: two in the same column
+            // on adjacent rows overlap. Alternating columns puts 229px between vertical
+            // neighbours, which is what makes the spacing work at all.
+            //
+            // So the ones Bedrock does not show continue the zigzag outward rather than filling
+            // the gaps, which is what they did until ControlLayoutTest started saying otherwise.
+            //
             // Bedrock shows interact only when something is worth interacting with, which needs a
             // hit test we cannot run from out here. Java's right button is worth a button of its
             // own regardless — tapping the world places a block, but not accurately.
-            ControlPlacement(ControlId.INTERACT, x = 0.826f, y = 0.394f, size = 58f),
+            ControlPlacement(ControlId.INTERACT, x = 0.727f, y = 0.394f, size = 58f),
             // Bedrock's top row is emote, chat and menu. Java has no emote, so the middle slot goes
             // to the inventory — which Bedrock reaches from the end of its own hotbar, and Java
             // cannot, because Java draws that hotbar itself.
             ControlPlacement(ControlId.CHAT, x = 0.472f, y = 0.033f, size = 25f),
             ControlPlacement(ControlId.INVENTORY, x = 0.500f, y = 0.033f, size = 25f),
             ControlPlacement(ControlId.PAUSE, x = 0.528f, y = 0.033f, size = 25f),
-            ControlPlacement(ControlId.ATTACK, x = 0.826f, y = 0.585f, size = 58f),
+            ControlPlacement(ControlId.ATTACK, x = 0.727f, y = 0.585f, size = 58f),
             // Java can middle-click to pick a block, drop with Q and open the debug screen with F3,
             // so all three do something — they are simply not what a thumb reaches for mid-fight.
             // Hidden rather than absent: one tap in the editor puts any of them on screen.
             ControlPlacement(
-                ControlId.PICK_BLOCK, x = 0.725f, y = 0.494f, size = 58f, visible = false,
+                ControlId.PICK_BLOCK, x = 0.628f, y = 0.494f, size = 58f, visible = false,
             ),
-            ControlPlacement(ControlId.DROP, x = 0.826f, y = 0.585f, size = 58f, visible = false),
+            ControlPlacement(ControlId.DROP, x = 0.628f, y = 0.276f, size = 58f, visible = false),
             ControlPlacement(ControlId.DEBUG, x = 0.440f, y = 0.033f, size = 25f, visible = false),
         )
 
