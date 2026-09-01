@@ -31,6 +31,7 @@ import com.github.lodestone.runtime.GlfwKeys
 import com.github.lodestone.runtime.JvmBridge
 import timber.log.Timber
 import java.io.File
+import kotlin.system.exitProcess
 
 /**
  * Hosts the running game: a full-screen surface with the touch controls drawn over it.
@@ -43,6 +44,15 @@ class GameActivity : ComponentActivity() {
 
     private var surfaceView: SurfaceView? = null
     private var started = false
+
+    /**
+     * Whether the hosted VM has finished, as opposed to the activity going away for some other
+     * reason — a rotation, or the system reclaiming it.
+     *
+     * Written on the game thread and read on the main one once the activity is being destroyed.
+     */
+    @Volatile
+    private var gameExited = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -167,6 +177,11 @@ class GameActivity : ComponentActivity() {
                 gameArgs = request.gameArgs,
             )
             Timber.i("Game exited with %d", status)
+            // Quitting the game has to take its window with it. Without this the activity stays up
+            // showing the last frame the game ever drew — frozen, with the overlay still on it —
+            // and the only way back to the launcher is the system's own back gesture.
+            gameExited = true
+            runOnUiThread { finish() }
         }
     }
 
@@ -210,6 +225,17 @@ class GameActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         surfaceView = null
+
+        // The process goes with the game, and not out of tidiness: JNI has never supported creating
+        // a second VM in one process, so a `:game` process that outlived its VM would be reused by
+        // the next launch and fail to start one. Ending it here is what makes playing twice work.
+        //
+        // Only when the VM has actually finished — this also runs for a rotation, which must not
+        // take the game down with it.
+        if (gameExited) {
+            Timber.i("Ending the game process")
+            exitProcess(0)
+        }
     }
 }
 
