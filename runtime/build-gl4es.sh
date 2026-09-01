@@ -15,7 +15,12 @@ ABIS=()
 OUTPUT="$(pwd)/out/gl4es"
 NDK="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
 API=26
-REPOSITORY="https://github.com/ptitSeb/gl4es.git"
+# Our fork, because gl4es upstream has no OpenGL 3.x at all: every version from 1.17 asks for a
+# 3.3 core profile, and what stood in the way was not emulation but missing wrappers — GL ES 3.0
+# already implements uniform buffers and sync objects, with the same names and signatures. The
+# branch carries those and the profile-mask reporting; nothing on it is device-specific.
+REPOSITORY="https://github.com/lodestone-launcher/gl4es.git"
+BRANCH="lodestone/gl-33-core"
 WORK="${TMPDIR:-/tmp}/lodestone-gl4es"
 
 while [[ $# -gt 0 ]]; do
@@ -42,7 +47,7 @@ SOURCE="${WORK}/gl4es"
 if [[ ! -d "${SOURCE}" ]]; then
     echo "==> Cloning gl4es"
     mkdir -p "${WORK}"
-    git clone --depth 1 "${REPOSITORY}" "${SOURCE}"
+    git clone --depth 1 --branch "${BRANCH}" "${REPOSITORY}" "${SOURCE}"
 fi
 
 mkdir -p "${OUTPUT}"

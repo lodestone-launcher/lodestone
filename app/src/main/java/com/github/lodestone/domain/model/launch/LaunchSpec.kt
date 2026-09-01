@@ -148,10 +148,14 @@ enum class Renderer(val id: String, val label: String, val description: String) 
      */
     val chain: List<Renderer>
         get() = when (this) {
-            // Zink first: it is the only one that reaches the 3.3 core profile the modern versions
-            // require, and gl4es is the fallback for the older ones it was always right for — and
-            // for a device whose Vulkan driver Zink cannot come up on.
-            AUTO -> listOf(ZINK, GL4ES)
+            // gl4es first, even though Zink is the one that reaches a 3.3 core profile today.
+            // Zink comes up — a real 4.6 core context — and then presents nothing: Mesa's fallback
+            // gralloc cannot describe an Android window buffer's modifier, the driver refuses the
+            // dma-buf import, and every frame logs "failed to create DRI image from FD" behind a
+            // frame loop that looks healthy. A black screen is a worse failure than an honest one,
+            // and it is not something the chain can detect and fall through on, because bringing
+            // the context up is exactly what succeeded.
+            AUTO -> listOf(GL4ES, ZINK)
             VULKAN -> emptyList()
             else -> listOf(this)
         }

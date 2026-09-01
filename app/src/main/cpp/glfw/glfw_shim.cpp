@@ -47,6 +47,13 @@ void applyEnvironment(bool desktopGl) {
     // Minecraft compiles its own shaders, so gl4es's fixed-pipeline emulation is not needed and
     // its shader conversion path is what matters.
     setenv("LIBGL_NOBANNER", "1", 1);
+    // Deliberately not claiming 3.3 yet. The fork can now answer the profile mask and forward
+    // uniform buffers and fences to an ES 3.0 driver, which is enough to get 1.17-and-later past
+    // the version gate and past the alignment it used to divide by — but not yet enough to create
+    // a uniform buffer, because gl4es keeps its own buffer name space and GL_UNIFORM_BUFFER is not
+    // one of the four targets it maps. Claiming 3.3 before that lands would turn a clean "does not
+    // support OpenGL 3.3" into a GL_INVALID_ENUM three frames into initialisation, and would move
+    // versions that work today onto paths that do not.
 }
 
 } // namespace
