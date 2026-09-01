@@ -5,10 +5,20 @@ import kotlinx.serialization.Serializable
 /**
  * One thing the player can touch, and what it does.
  *
- * The set is Pocket Edition's, because that is the layout this is meant to feel like. Two of its
- * buttons have no counterpart here and are absent: Bedrock's hotbar is drawn by its own HUD, and
- * Java draws its own, so there is nothing for us to place; and Bedrock's "use" is a tap on the
- * world rather than a button, which is how the camera handles it here too.
+ * The set is Pocket Edition's, and which buttons that means is not a guess: its native library
+ * names the textures its touch controls draw from, and they are exactly `joystick_frame`,
+ * `joystick_knob`, `jump`, `sneak`, `sprint`, `attack`, `interact` and `pick_block`. Everything
+ * here up to [PICK_BLOCK] is one of those.
+ *
+ * Every one of them does something in Java. Bedrock's other touch buttons — mount and dismount,
+ * ascend and descend in air and in water, the ride and exit pair — are all for states Java has no
+ * key for at all, so they are not here: a button that cannot be pressed into anything is worse than
+ * a missing one, because it looks like it should work.
+ *
+ * The rest are ours, and they exist because Java needs them where Bedrock does not. Bedrock reaches
+ * its inventory from the end of its own hotbar, which Java draws itself and we cannot put a button
+ * inside; its chat and pause live in a HUD row that is not a touch control at all; and it has no
+ * drop key or debug screen to offer.
  */
 @Serializable
 enum class ControlId {
@@ -18,6 +28,10 @@ enum class ControlId {
     SNEAK,
     SPRINT,
     ATTACK,
+    /** Bedrock's use button. Java's right mouse button: place a block, open a door, eat. */
+    INTERACT,
+    /** Bedrock's pick-block button, which is Java's middle mouse button. */
+    PICK_BLOCK,
     INVENTORY,
     CHAT,
     DROP,
@@ -112,15 +126,23 @@ data class ControlLayout(val placements: List<ControlPlacement> = DEFAULT) {
             ControlPlacement(ControlId.JUMP, x = 0.925f, y = 0.394f, size = 58f),
             ControlPlacement(ControlId.SPRINT, x = 0.826f, y = 0.494f, size = 58f),
             ControlPlacement(ControlId.SNEAK, x = 0.925f, y = 0.585f, size = 58f),
+            // Bedrock shows interact only when something is worth interacting with, which needs a
+            // hit test we cannot run from out here. Java's right button is worth a button of its
+            // own regardless — tapping the world places a block, but not accurately.
+            ControlPlacement(ControlId.INTERACT, x = 0.826f, y = 0.394f, size = 58f),
             // Bedrock's top row is emote, chat and menu. Java has no emote, so the middle slot goes
             // to the inventory — which Bedrock reaches from the end of its own hotbar, and Java
             // cannot, because Java draws that hotbar itself.
             ControlPlacement(ControlId.CHAT, x = 0.472f, y = 0.033f, size = 25f),
             ControlPlacement(ControlId.INVENTORY, x = 0.500f, y = 0.033f, size = 25f),
             ControlPlacement(ControlId.PAUSE, x = 0.528f, y = 0.033f, size = 25f),
-            // Bedrock has none of these. They are placed so that turning one on in the editor puts
-            // it somewhere sensible, and hidden so that the default is what Bedrock's is.
-            ControlPlacement(ControlId.ATTACK, x = 0.826f, y = 0.394f, size = 58f, visible = false),
+            ControlPlacement(ControlId.ATTACK, x = 0.826f, y = 0.585f, size = 58f),
+            // Java can middle-click to pick a block, drop with Q and open the debug screen with F3,
+            // so all three do something — they are simply not what a thumb reaches for mid-fight.
+            // Hidden rather than absent: one tap in the editor puts any of them on screen.
+            ControlPlacement(
+                ControlId.PICK_BLOCK, x = 0.725f, y = 0.494f, size = 58f, visible = false,
+            ),
             ControlPlacement(ControlId.DROP, x = 0.826f, y = 0.585f, size = 58f, visible = false),
             ControlPlacement(ControlId.DEBUG, x = 0.440f, y = 0.033f, size = 25f, visible = false),
         )

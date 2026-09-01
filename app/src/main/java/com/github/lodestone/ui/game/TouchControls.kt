@@ -206,6 +206,28 @@ private fun ControlButton(
         ControlId.SNEAK -> LatchingButton(id, size, GlfwKeys.LEFT_SHIFT)
         ControlId.SPRINT -> LatchingButton(id, size, GlfwKeys.LEFT_CONTROL)
 
+        ControlId.INTERACT -> HoldButton(
+            id = id,
+            size = size,
+            onPress = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.RIGHT, GlfwBridge.Action.PRESS)
+            },
+            onRelease = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.RIGHT, GlfwBridge.Action.RELEASE)
+            },
+        )
+
+        ControlId.PICK_BLOCK -> HoldButton(
+            id = id,
+            size = size,
+            onPress = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.MIDDLE, GlfwBridge.Action.PRESS)
+            },
+            onRelease = {
+                GlfwBridge.sendMouseButton(GlfwBridge.MouseButton.MIDDLE, GlfwBridge.Action.RELEASE)
+            },
+        )
+
         ControlId.ATTACK -> HoldButton(
             id = id,
             size = size,
@@ -337,14 +359,8 @@ private fun ControlFace(id: ControlId, pressed: Boolean, size: Dp) {
     // where there is not. Bedrock's small top buttons are this shape: a glyph on a plate, not a
     // face — which is why they are a separate case rather than differently named art.
     val icon = iconFor(id)
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(if (pressed) BUTTON_LATCHED else BUTTON_BACKGROUND)
-            .border(1.dp, BUTTON_BORDER, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier = Modifier.size(size), contentAlignment = Alignment.Center) {
+        PlateFace(pressed = pressed, modifier = Modifier.fillMaxSize())
         if (icon != null) {
             Image(
                 painter = pixelPainter(icon),
@@ -357,7 +373,7 @@ private fun ControlFace(id: ControlId, pressed: Boolean, size: Dp) {
         } else {
             Text(
                 text = labelFor(id),
-                color = if (pressed) Color.Black else Color.White,
+                color = PLATE_EDGE,
                 fontSize = LABEL_SIZE,
                 fontWeight = FontWeight.Medium,
             )
@@ -387,6 +403,43 @@ private fun texturesFor(id: ControlId): Pair<Int, Int>? {
         val pressed = context.resources
             .getIdentifier("${base}_pressed", "drawable", context.packageName)
         normal to (if (pressed == 0) normal else pressed)
+    }
+}
+
+/**
+ * Bedrock's button plate, drawn rather than copied.
+ *
+ * Its construction is read straight out of `jump.png`, which is one of these with a glyph on it: a
+ * 22-pixel square with transparent corners, a black edge, a two-pixel ring of #686868 inside that,
+ * a #808080 face, and two rows of #39393C along the bottom for the shadow that makes it sit proud.
+ * Everything is in units of a twenty-second, so it scales the way the real ones do.
+ *
+ * This exists for the buttons Bedrock has no face for — its own chat and menu are HUD chrome rather
+ * than touch controls, and Java wants an inventory button Bedrock reaches from its hotbar. Drawing
+ * the plate instead of inventing one keeps those next to Bedrock's own without looking borrowed
+ * from somewhere else.
+ */
+@Composable
+private fun PlateFace(pressed: Boolean, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val u = this.size.minDimension / 22f
+        fun rect(x: Int, y: Int, w: Int, h: Int, colour: Color) = drawRect(
+            color = colour,
+            topLeft = Offset(x * u, y * u),
+            size = Size(w * u, h * u),
+        )
+
+        // The edge, with the corners left out — that is what rounds it.
+        rect(1, 0, 20, 22, PLATE_EDGE)
+        rect(0, 1, 22, 20, PLATE_EDGE)
+        // The inset ring and the face.
+        rect(1, 1, 20, 20, if (pressed) PLATE_FACE else PLATE_RING)
+        rect(3, 3, 16, 16, if (pressed) PLATE_RING else PLATE_FACE)
+        // The shadow that makes it stand up. A pressed button loses it, which is how Bedrock's
+        // own pressed faces read.
+        if (!pressed) {
+            rect(2, 19, 18, 2, PLATE_SHADOW)
+        }
     }
 }
 
@@ -426,6 +479,8 @@ private fun labelFor(id: ControlId): String = when (id) {
     ControlId.SNEAK -> "▼"
     ControlId.SPRINT -> "»"
     ControlId.ATTACK -> "✦"
+    ControlId.INTERACT -> "☞"
+    ControlId.PICK_BLOCK -> "⛏"
     ControlId.INVENTORY -> "☰"
     ControlId.CHAT -> "T"
     ControlId.DROP -> "Q"
@@ -848,6 +903,12 @@ private fun EditorAction(label: String, onClick: () -> Unit) {
 }
 
 private val BUTTON_BACKGROUND = Color(0x66000000)
+
+// Sampled from Bedrock's own jump.png rather than chosen.
+private val PLATE_EDGE = Color(0xFF000000)
+private val PLATE_RING = Color(0xFF686868)
+private val PLATE_FACE = Color(0xFF808080)
+private val PLATE_SHADOW = Color(0xFF39393C)
 private val BUTTON_BORDER = Color(0x99FFFFFF)
 private val BUTTON_LATCHED = Color(0xCCFFFFFF)
 private val STICK_BASE = Color(0x40000000)
